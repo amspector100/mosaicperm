@@ -1,1 +1,1 @@
-from . import factor, tiles
+from . import factor, tilings
