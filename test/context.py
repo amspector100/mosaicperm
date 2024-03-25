@@ -42,6 +42,26 @@ class MosaicTest(unittest.TestCase):
 			f"binary p-vals are < 1 with probability {est} > 1/2, reps={reps}, lower_ci={lower_ci}"
 		)
 
+	def pearson_chi_square_test(
+		self, counts, test_name, alpha=0.001, probs=None
+	):
+		"""
+		uses pearson chi squared test to test multinomial dist
+		"""
+		# default is uniform distribution
+		d = len(counts)
+		if probs is None:
+			probs = np.ones(d) / d
+		# expected counts
+		expected = np.sum(counts) * probs
+		# chisquared stat + p-value
+		chisquared = np.sum((counts - expected)**2 / expected) 
+		pval = 1 - stats.chi2(df=d - 1).cdf(chisquared)
+		# test
+		self.assertTrue(
+			pval >= alpha,
+			f"For {test_name}, pearson chisquare pval ({pval}) < alpha ({alpha}), stat={chisquared}."
+		)
 
 def run_all_tests(test_classes):
 	"""

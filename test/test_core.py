@@ -48,7 +48,6 @@ class TestAdaptivePval(context.MosaicTest):
 			err_msg=f"compute_adaptive_pval gives unexpected result conditional on the data"
 		)
 
-
 	def test_empirical_validity(self):
 		"""
 		Tests

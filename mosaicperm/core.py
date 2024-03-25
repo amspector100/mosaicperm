@@ -1,5 +1,9 @@
 import numpy as np
+import pandas as pd
+from scipy import stats
 from . import utilities
+from typing import Optional
+
 
 def compute_adaptive_pval(
 	statistic, null_statistics
@@ -40,3 +44,302 @@ def compute_adaptive_pval(
 	# return pval
 	pval = np.sum(adapt_stats[0] <= adapt_stats) / (nrand + 1)
 	return pval, adapt_stats[0], adapt_stats[1:]
+
+class MosaicPermutationTest():
+	"""
+	Generic class meant for subclassing.
+	"""
+	def __init__(self):
+		self._precompute_permutation_helpers()
+
+	def _precompute_permutation_helpers(self):
+		"""
+		Precomputes some matrices to ensure faster tile permutations.
+		"""
+		# maps i, j to the tile number
+		self._tilenums = np.empty(self.outcomes.shape, dtype=int)
+		# sum of batch lengths
+		self._batchlen_sum = np.sum([len(batch) for batch, _ in self.tiles])
+		# self._batchinds[i, j] maps coordinate (i, j) to a unique coordinate
+		# from 0 to self.batchlen_sum depending only on i and the tile of i,j
+		self._batchinds = np.zeros(self.outcomes.shape, dtype=int)
+		# loop through and fill
+		counter = 0
+		for i, (batch, group) in enumerate(self.tiles):
+			br = batch.reshape(-1, 1)
+			gr = group.reshape(1, -1)
+			self._tilenums[br, gr] = i
+			self._batchinds[br, gr] = np.arange(counter, counter+len(batch)).reshape(-1, 1)
+			counter += len(batch)
+
+	def permute_residuals(
+		self, 
+		method: Optional[str]='argsort'
+	):
+		"""
+		Permutes residuals within tiles. Permuted values are stored in self._rtilde
+
+		Parameters
+		----------
+		method : str
+			One of ['ix', 'argsort']. 
+			- 'ix' is naive and has complexity O(n_subjects * n_obs) but uses
+			  a for loop and can be slow in practice.
+			- 'argsort' has complexity O(n_obs log(n_obs) * n_subjects) but 
+			  is faster in practice.
+
+		Returns
+		-------
+		None : NoneType
+		"""
+		# Compute null variant
+		if method == 'argsort':
+			self._rtilde = np.take_along_axis(
+				self.residuals,
+				np.argsort(
+					self._tilenums + np.random.uniform(size=self._batchlen_sum)[self._batchinds], 
+					axis=0,
+				),
+				axis=0
+			)
+		else:
+			for (batch, group) in self.tiles:
+				# Permute within tile
+				# this is faster than using np.ix_
+				br_shuffle = np.random.permutation(batch).reshape(-1, 1)
+				br = batch.reshape(-1, 1)
+				gr = group.reshape(1, -1)
+				self._rtilde[br, gr] = self.residuals[br_shuffle, gr]
+
+	def compute_p_value(self, nrand: int, verbose: bool):
+		"""
+		Parameters
+		----------
+		nrand : int
+			Number of randomizations to perform.
+		verbose : bool
+			If True (default), displays a progress bar. 
+		"""
+		# Compute statistic and infer its dimension (for adaptive statistics)
+		self.statistic = self.test_stat(self.residuals, **self.tstat_kwargs)
+		if utilities.haslength(self.statistic):
+			d = len(self.statistic)
+		else:
+			d = 1
+		# compute null statistics
+		self.null_statistics = np.zeros((nrand, d))
+		for r in utilities.vrange(nrand, verbose=verbose):
+			# Compute null statistic
+			self.permute_residuals()
+			self.null_statistics[r] = self.test_stat(self._rtilde, **self.tstat_kwargs)
+
+		# compute p-value and return
+		out = compute_adaptive_pval(
+			self.statistic, self.null_statistics
+		)
+		self.pval, self.adapt_stat, self.null_adapt_stats = out
+		return self.pval
+
+
+	def fit(
+		self,
+		nrand: Optional[int]=500,
+		verbose: Optional[bool]=True,
+	):
+		"""
+		Parameters
+		----------
+		nrand : int
+			Number of randomizations to perform.
+		verbose : bool
+			If True (default), displays a progress bar.
+
+		Returns
+		-------
+		self : object
+		"""
+		self.compute_mosaic_residuals()
+		self.compute_p_value(nrand=nrand, verbose=verbose)
+		return self
+
+
+	def summary(self, coordinate_index=None):
+		"""
+		Parameters
+		----------
+		coordinate_index : pd.Index or np.array
+			Array of index information for the dimensions of the test statistic,
+			when using a multidimensional test statistic. Otherwise ignored. 
+
+		Returns
+		-------
+		summary : pd.DataFrame
+			dataframe of summary information.
+		"""
+		fields = ['statistic', 'null_statistic_mean', 'p_value']
+		d = self.null_statistics.shape[1]
+		if d == 1:
+			return pd.Series(
+				[self.statistic, self.null_statistics.mean(), self.pval],
+				index=fields
+			)
+		else:
+			# Index
+			if coordinate_index is None:
+				coordinate_index = [f"Coordinate {i}" for i in range(d)]
+			# Marginal p-values
+			marg_pvals = 1 + np.sum(self.statistic <= self.null_statistics, axis=0).astype(float)
+			marg_pvals /= float(1 + self.null_statistics.shape[0])
+			# Construct dfs
+			marg_out = pd.DataFrame(
+				np.stack(
+					[self.statistic, self.null_statistics.mean(axis=0), marg_pvals],
+					axis=1
+				),
+				index=coordinate_index,
+				columns=fields
+			)
+			adapt_out = pd.DataFrame(
+				[[self.adapt_stat, self.null_adapt_stats.mean(), self.pval]],
+				index=['Adaptive'],
+				columns=fields,
+			)
+			out = pd.concat([adapt_out, marg_out], axis='index')
+			out.index.name = 'Statistic type'
+			return out
+
+	def compute_p_value_tseries(
+		self, nrand: int, verbose: bool, nvals: int, window: int, 
+	):
+		"""
+		Parameters
+		----------
+		nrand : int
+			Number of randomizations to perform.
+		verbose : bool
+			If True (default), displays a progress bar. 
+		window : int
+			Window size.
+		nvals : int
+			Number of evenly-spaced values to compute.
+		"""
+		n_obs = self.outcomes.shape[0]
+		nvals = min(n_obs, nvals)
+		# starts/ends of windows to compute test statistic
+		if window is None:
+			self.ends = np.round(np.linspace(0, n_obs, nvals+1)[1:]).astype(int)
+			self.ends = np.sort(np.unique(self.ends[self.ends > 0]))
+			self.starts = np.zeros(len(self.ends)).astype(int)
+		else:
+			self.ends = np.round(np.linspace(window, n_obs, nvals)).astype(int)
+			self.ends = np.sort(np.unique(self.ends[self.ends > 0]))
+			self.starts = np.maximum(0, self.ends - window).astype(int)
+		nvals = len(self.ends)
+		# compute tseries statistic
+		self.stats_tseries = np.stack(
+			[
+				self.test_stat(self.residuals[start:end], **self.tstat_kwargs) 
+				for start, end in zip(self.starts, self.ends)
+			], 
+			axis=0
+		).reshape(nvals, -1)
+		d = self.stats_tseries.shape[1]
+		# compute null statistics
+		self.null_tseries = np.zeros((nvals, nrand, d))
+		for r in utilities.vrange(nrand, verbose=verbose):
+			self.permute_residuals()
+			self.null_tseries[:, r] = np.stack(
+				[self.test_stat(self._rtilde[start:end], **self.tstat_kwargs) 
+				for start, end in zip(self.starts, self.ends)],
+				axis=0
+			).reshape(nvals, -1)
+		# Compute p-values
+		self.pval_tseries = np.zeros(nvals)
+		self.adapt_stats_tseries = np.zeros(nvals)
+		self.null_adapt_tseries = np.zeros((nvals, nrand))
+		for i in range(nvals):
+			out = compute_adaptive_pval(
+				self.stats_tseries[i], self.null_tseries[i]
+			)
+			self.pval_tseries[i] = out[0]
+			self.adapt_stats_tseries[i] = out[1]
+			self.null_adapt_tseries[i] = out[2]
+
+	def fit_tseries(
+		self, 
+		nrand: Optional[int]=500,
+		verbose: Optional[bool]=True, 
+		nvals: Optional[int]=20,
+		window: Optional[int]=None, 
+	):
+		"""
+		Parameters
+		----------
+		nrand : int
+			Number of randomizations to perform.
+		verbose : bool
+			If True (default), displays a progress bar. 
+		window : int
+			Window size. Default: None.
+		nvals : int
+			Number of values. Defaults to 20.
+		"""
+		self.compute_mosaic_residuals()
+		self.compute_p_value_tseries(
+			nrand=nrand, verbose=verbose, nvals=nvals, window=window
+		)
+		return self
+
+	def plot_tseries(self, time_index=None, alpha=0.05, **subplots_kwargs):
+		"""
+		time_index : np.array or pd.Index
+			n_obs-length index information (e.g. datetimes) for each observation.
+		"""
+		# Create plot and x-values
+		import matplotlib.pyplot as plt
+		subplots_kwargs['figsize'] = subplots_kwargs.get("figsize", (12, 6)) # default
+		fig, axes = plt.subplots(1, 2, **subplots_kwargs)
+		if time_index is None:
+			xvals = self.ends
+		else:
+			xvals = time_index[self.ends]
+
+		# Subplot 1: p-value
+		zvals = np.maximum(stats.norm.ppf(1-self.pval_tseries), 0)
+		axes[0].plot(xvals, zvals, color='blue', label='Observed')
+		axes[0].scatter(xvals, zvals, color='blue')
+		axes[0].axhline(
+			stats.norm.ppf(1-alpha),
+			color='black',
+			linestyle='dotted',
+			label=rf'Significance threshold\n(Marginal,  $\alpha$={alpha})'
+		)
+		axes[0].set(xlabel='', ylabel=r'Z-statistic: $\Phi(1-p)_+$')
+		axes[0].legend()
+		# Subplot 2: statistic value and quantile
+		if self.stats_tseries.shape[1] == 1:
+			ystat = self.stats_tseries[:, 0]
+			ynulls = self.null_tseries[:, :, 0]
+		else:
+			ystat = self.adapt_stats_tseries
+			ynulls = self.null_adapt_tseries
+		# Compute quantile 
+		nrand = ynulls.shape[1]
+		yquant = np.concatenate([ystat.reshape(-1, 1), ynulls], axis=1) # shape: nvals x (nrand + 1)
+		yquant = np.sort(yquant, axis=1)
+		rank = int(nrand + 1 - np.floor(alpha * (nrand + 1)))
+		yquant = yquant[:, rank-1] # the -1 accounts for zero indexing
+		# Plot
+		axes[1].plot(xvals, ystat, color='cornflowerblue', label='Mosaic test statistic')
+		axes[1].scatter(xvals, ystat, color='cornflowerblue')
+		axes[1].plot(
+			xvals, 
+			yquant, 
+			color='orangered',
+			label=rf'Null quantile, $\alpha$={alpha}',
+			linestyle='dotted',
+		)
+		axes[1].scatter(xvals, yquant, color='orangered')
+		axes[1].set(xlabel='', ylabel='Statistic value')
+		axes[1].legend()
+		plt.show()

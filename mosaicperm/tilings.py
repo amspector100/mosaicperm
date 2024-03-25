@@ -73,12 +73,11 @@ def random_tiles(
 	# return tiles
 	return tiles
 
-
-
 def default_factor_tiles(
 	exposures: np.array,
 	n_obs: Optional[int]=None,
 	max_batchsize: Optional[int]=10,
+	ngroups: Optional[int]=None,
 ):
 	"""
 	Computes default tiling for factor models.
@@ -93,6 +92,10 @@ def default_factor_tiles(
 		Number of timepoints. Optional unless exposures is 2D
 	max_batchsize : int
 		Maximum length (in time) of a tile.
+	ngroups : int
+		Number of groups to partition the subjects/assets into.
+		Defaults to the maximum value such that each group contains
+		5 times as many assets as there are factors.
 	"""
 	# Choose batches
 	if len(exposures.shape) == 3:
@@ -110,7 +113,8 @@ def default_factor_tiles(
 		raise ValueError(f"exposures should be a 2D or 3D array but has shape {exposures.shape}")
 
 	# Partition subjects and construct tiles
-	ngroups = max(2, int(np.ceil(n_subjects / (5*n_factors))))
+	if ngroups is None:
+		ngroups = max(2, int(np.ceil(n_subjects / (5*n_factors))))
 	tiles = []
 	for batch in batches:
 		groups = even_random_partition(n=n_subjects, k=ngroups, shuffle=True)
