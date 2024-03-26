@@ -6,8 +6,9 @@ from typing import Optional
 
 
 def compute_adaptive_pval(
-	statistic, null_statistics
-):
+	statistic: np.array, 
+	null_statistics: np.array,
+) -> tuple:
 	"""
 	Computes an adaptive p-value based on possibly many test statistics.
 
@@ -75,7 +76,7 @@ class MosaicPermutationTest():
 	def permute_residuals(
 		self, 
 		method: Optional[str]='argsort'
-	):
+	) -> None:
 		"""
 		Permutes residuals within tiles. Permuted values are stored in self._rtilde
 
@@ -111,14 +112,20 @@ class MosaicPermutationTest():
 				gr = group.reshape(1, -1)
 				self._rtilde[br, gr] = self.residuals[br_shuffle, gr]
 
-	def compute_p_value(self, nrand: int, verbose: bool):
+	def compute_p_value(self, nrand: int, verbose: bool) -> float:
 		"""
+		Produces underlying mosaic p-value in the ``fit`` method.
+
 		Parameters
 		----------
 		nrand : int
 			Number of randomizations to perform.
 		verbose : bool
 			If True (default), displays a progress bar. 
+
+		Returns
+		-------
+		pval : float
 		"""
 		# Compute statistic and infer its dimension (for adaptive statistics)
 		self.statistic = self.test_stat(self.residuals, **self.tstat_kwargs)
@@ -163,6 +170,7 @@ class MosaicPermutationTest():
 		return self
 
 
+	@property
 	def summary(self, coordinate_index=None):
 		"""
 		Parameters
@@ -209,22 +217,28 @@ class MosaicPermutationTest():
 			return out
 
 	def compute_p_value_tseries(
-		self, nrand: int, verbose: bool, nvals: int, window: int, 
-	):
+		self, nrand: int, verbose: bool, n_timepoints: int, window: int, 
+	) -> None:
 		"""
+		Computes the underlying p-values produced in ``fit_tseries``.
+
 		Parameters
 		----------
 		nrand : int
 			Number of randomizations to perform.
 		verbose : bool
 			If True (default), displays a progress bar. 
+		n_timepoints : int
+			Computes p-values at ``n_timepoints`` evenly spaced timepoints.
 		window : int
 			Window size.
-		nvals : int
-			Number of evenly-spaced values to compute.
+
+		Returns
+		-------
+		None : NoneType
 		"""
 		n_obs = self.outcomes.shape[0]
-		nvals = min(n_obs, nvals)
+		nvals = min(n_obs, n_timepoints)
 		# starts/ends of windows to compute test statistic
 		if window is None:
 			self.ends = np.round(np.linspace(0, n_obs, nvals+1)[1:]).astype(int)
@@ -269,31 +283,51 @@ class MosaicPermutationTest():
 		self, 
 		nrand: Optional[int]=500,
 		verbose: Optional[bool]=True, 
-		nvals: Optional[int]=20,
+		n_timepoints: Optional[int]=20,
 		window: Optional[int]=None, 
 	):
 		"""
+		Iteratively runs the mosaic permutation test for various windows
+		of the data, producing a time series of p-values and test statistics.
+
 		Parameters
 		----------
 		nrand : int
 			Number of randomizations to perform.
 		verbose : bool
 			If True (default), displays a progress bar. 
+		n_timepoints : int
+			Computes p-values at ``n_timepoints`` evenly spaced
+			timepoints. Default: 20.
 		window : int
-			Window size. Default: None.
-		nvals : int
-			Number of values. Defaults to 20.
+			Window size. Default: None (use all available data).
+
+		Returns
+		-------
+		self : object
 		"""
 		self.compute_mosaic_residuals()
 		self.compute_p_value_tseries(
-			nrand=nrand, verbose=verbose, nvals=nvals, window=window
+			nrand=nrand, verbose=verbose, n_timepoints=n_timepoints, window=window
 		)
 		return self
 
-	def plot_tseries(self, time_index=None, alpha=0.05, **subplots_kwargs):
+	def plot_tseries(self, time_index=None, alpha=0.05, **subplots_kwargs) -> None:
 		"""
+		
+
+		Parameters
+		----------
 		time_index : np.array or pd.Index
 			n_obs-length index information (e.g. datetimes) for each observation.
+		alpha : float
+			Nominal level.
+		**subplots_kwargs : dict
+			kwargs for ``plt.subplots()``, e.g., ``figsize``.
+
+		Returns
+		-------
+		None : NoneType
 		"""
 		# Create plot and x-values
 		import matplotlib.pyplot as plt
@@ -312,9 +346,9 @@ class MosaicPermutationTest():
 			stats.norm.ppf(1-alpha),
 			color='black',
 			linestyle='dotted',
-			label=rf'Significance threshold\n(Marginal,  $\alpha$={alpha})'
+			label=rf'Threshold ($\alpha$={alpha})'
 		)
-		axes[0].set(xlabel='', ylabel=r'Z-statistic: $\Phi(1-p)_+$')
+		axes[0].set(xlabel='Time', ylabel=r'Z-statistic: $\Phi(1-p)_+$')
 		axes[0].legend()
 		# Subplot 2: statistic value and quantile
 		if self.stats_tseries.shape[1] == 1:
@@ -340,6 +374,6 @@ class MosaicPermutationTest():
 			linestyle='dotted',
 		)
 		axes[1].scatter(xvals, yquant, color='orangered')
-		axes[1].set(xlabel='', ylabel='Statistic value')
+		axes[1].set(xlabel='Time', ylabel='Statistic value')
 		axes[1].legend()
 		plt.show()

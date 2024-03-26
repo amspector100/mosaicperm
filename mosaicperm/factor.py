@@ -41,6 +41,68 @@ def ols_residuals(
 
 
 class MosaicFactorTest(core.MosaicPermutationTest):
+	"""
+	Parameters
+	----------
+	outcomes : np.array
+		(n_obs, n_subjects) array of outcomes, e.g., asset returns.
+		``outcomes`` may contain nans to indicate missing values.
+	exposures : np.array
+		(n_obs, n_subjects, n_factors) array of factor exposures
+		OR 
+		(n_subjects, n_factors) array of factor exposures if
+		the exposures do not change with time.
+	test_stat : function
+		A function mapping a (n_obs, n_subjects)-size array of 
+		residuals to one of two options:
+		- A single statistic measuring evidence against the null.
+		- Alternatively, a 1D array of many statistics, in which
+		  case the p-value will adaptively aggregate evidence across
+		  all test statistics.
+	test_stat_kwargs : dict
+		Optional kwargs to be passed to ``test_stat``.
+	tiles : list
+		Optional 
+	**kwargs : dict
+		Optional kwargs to ``tilings.default_factor_tiles``.
+		Ignored if ``tiles`` is provided.
+
+	Examples
+	--------
+	Here we fit a mosaic permutation test 
+	based on synthetic data: ::
+		import numpy as np
+		import mosaicperm as mp
+
+		# synthetic outcomes and exposures
+		n_obs, n_subjects, n_factors = 100, 200, 20
+		outcomes = np.random.randn(n_obs, n_subjects)
+		exposures = np.random.randn(n_obs, n_subjects, n_factors)
+		# example of missing data
+		outcomes[0:10][:, 0:5] = np.nan
+		exposures[0:10][:, 0:5] = np.nan
+
+		# fit mosaic permutation test
+		mpt = mp.factor.MosaicFactorTest(
+			outcomes=outcomes,
+			exposures=exposures,
+			test_stat=mp.statistics.mean_maxcorr_stat,
+		)
+		print(mpt.fit().summary())
+
+		# produce a time series plot of this analysis
+		mpt.fit_tseries(
+			nrand=100, n_timepoints=20,
+		).plot_tseries()
+
+		# repeat using adaptive test statistic
+		mpt2 = mp.factor.MosaicFactorTest(
+			outcomes=outcomes,
+			exposures=exposures,
+			test_stat=mp.statistics.quantile_maxcorr_stat,
+		)
+		print(mpt2.fit().summary())
+	"""
 
 	def __init__(
 		self,

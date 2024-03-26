@@ -1,0 +1,20 @@
+========================================
+Welcome to the mosaicperm documentation!
+========================================
+
+The mosaic permutation test is an exact and nonparametric test of the goodness-of-fit of a prespecified factor model (specifically, a factor model with known exposures). ``mosaicperm`` implements these methods. See the tutorials for more details.
+
+.. toctree::
+   :maxdepth: 3
+   :caption: Contents:
+
+   installation
+   apiref
+
+
+Indices and tables
+==================
+
+* :ref:`genindex`
+* :ref:`modindex`
+* :ref:`search`

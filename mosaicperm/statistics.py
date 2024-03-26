@@ -8,7 +8,7 @@ def active_subset(
 	residuals: np.array, 
 	subset: Optional[np.array]=None,
 	min_std: float=0
-):
+) -> np.array:
 	"""
 	Returns a subset of the subjects whose residual std is above
 	min_std.
@@ -36,7 +36,7 @@ def active_subset(
 def mean_maxcorr_stat(
 	residuals: np.array, 
 	**kwargs
-):
+) -> float:
 	"""
 	Mean maximum (absolute) correlation statistic.
 
@@ -59,7 +59,7 @@ def quantile_maxcorr_stat(
 	residuals: np.array, 
 	qs: Optional[np.array]=DEFAULT_QS,
 	**kwargs
-):
+) -> np.array:
 	"""
 	Quantiles of maximum (absolute) correlation statistic.
 
@@ -85,7 +85,7 @@ def mosaic_bcv_stat(
 	new_exposure: np.array, 
 	tiles: list, 
 	mus: Optional[np.array]=None,
-):
+) -> float:
 	"""
 	Computes a mosaic estimate of the out-of-sample R^2
 	measuring model improvement for the augmented model
@@ -135,7 +135,7 @@ def adaptive_mosaic_bcv_stat(
 	new_exposures: Union[np.array, list],
 	tiles: list,
 	mus: Optional[np.array]=None,
-):
+) -> np.array:
 	"""
 	Computes a mosaic BCV statistic for several augmented models.
 
@@ -173,7 +173,7 @@ def adaptive_mosaic_bcv_stat(
 def approximate_sparse_pcas(
 	Sigma: np.array,
 	quantiles: Optional[np.array]=PCA_DEFAULT_QS
-):
+) -> np.array:
 	"""
 	Performs approximate sparse pca.
 
