@@ -10,13 +10,12 @@ def active_subset(
 	min_std: float=0
 ) -> np.array:
 	"""
-	Returns a subset of the subjects whose residual std is above
-	min_std.
+	Returns subjects whose residual stdev is above ``min_std``.
 
 	Parameters
 	----------
 	residuals : np.array
-		(n_obs, n_subjects) array of residuals
+		(``n_obs``, ``n_subjects``) array of residuals
 	subset : np.array
 		Optional preformed subset; the output will be a subset
 		of subset.
@@ -87,21 +86,21 @@ def mosaic_bcv_stat(
 	mus: Optional[np.array]=None,
 ) -> float:
 	"""
-	Computes a mosaic estimate of the out-of-sample R^2
-	measuring model improvement for the augmented model
-	containing one additional exposure.
+	Out-of-sample R^2 measuring improvement for an
+	augmented model containing an additional exposure.
 
 	Parameters
 	----------
 	residuals : np.array
-		(n_obs, n_subjects) array of residuals
+		(``n_obs``, ``n_subjects``) array of residuals
 	new_exposure : np.array
-		n_subject-length array of new exposures
-	tiles : list
-		tiling used to produce the mosaic residuals
+		``n_subject``-length array of new exposures
+	tiles : mosaicperm.tilings.Tiling
+		The :class:`.Tiling` used to produce the mosaic
+		residuals.
 	mus : np.array
-		Optional n_subjects-length array of estimated means
-		of residuals.
+		Optional ``n_subjects``-length array of estimated
+		means of residuals.
 
 	Returns
 	-------
@@ -142,13 +141,14 @@ def adaptive_mosaic_bcv_stat(
 	Parameters
 	----------
 	residuals : np.array
-		(n_obs, n_subjects) array of residuals
-	new_exposures : np.array or list
-		(n_models, n_subject)-shaped array 
-		such that new_exposures[i] is a 
-		n_subject-length array of new exposures.
-	tiles : list
-		tiling used to produce the mosaic residuals
+		(``n_obs``, ``n_subjects``) array of residuals
+	new_exposures : np.array
+		(``n_models``, ``n_subject``)-shaped array 
+		such that ``new_exposures[i]`` is an array
+		of new exposures.	
+	tiles : mosaicperm.tilings.Tiling
+		The :class:`.Tiling` used to produce the mosaic
+		residuals.
 	mus : np.array
 		Optional n_subjects-length array of estimated means
 		of residuals.

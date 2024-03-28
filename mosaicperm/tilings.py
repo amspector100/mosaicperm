@@ -1,8 +1,22 @@
 import numpy as np
 import itertools
 from typing import Optional, Union
+from abc import ABC
 
-def check_valid_tiling(tiles):
+def check_valid_tiling(tiles: list) -> None:
+	"""
+	Checks validity of a tiling.
+
+	Parameters
+	----------
+	tiles : list
+		``tiles[i]`` is a tuple of two np.arrays of indices defining tile ``i``.
+		I.e, tile ``i`` of an array is ``data[tile[i][0]][:, tile[i][1]]``.
+
+	Raises
+	------
+		ValueError: if ``tiles`` is an invalid tiling.
+	"""
 	## Check disjointness
 	all_support = set()
 	for m, tile in enumerate(tiles):
@@ -17,6 +31,34 @@ def check_valid_tiling(tiles):
 	if set(itertools.product(np.arange(n_obs), np.arange(n_subjects))) != all_support:
 		raise ValueError(f"Tiles are disjoint but do not partition [n_obs] x [n_subjects]")
 	return tiles
+
+class Tiling(list):
+	"""
+	A class to store tilings used in mosaic tests.
+
+	Parameters
+	----------
+	tiles : list
+		List of tuples of two integer np.arrays. E.g., tile 
+		``i`` of an array is ``data[tile[i][0]][:, tile[i][1]]``.
+
+	Raises
+	------
+	ValueError : If tiles does not define a partition of the cartesian
+		product of ``{0, ..., n}`` x ``{0, ..., k}`` for some integers
+		``n`` and ``k``. 
+
+	Notes
+	-----
+	This class thinly wraps python ``list``. 
+	"""
+
+	def __init__(self, tiles: list):
+		check_valid_tiling(tiles)
+		super().__init__(tiles)
+		
+	def __str__(self, *args, **kwargs):
+		return "Tiling" + super().__str__(*args, **kwargs)
 
 def even_random_partition(n, k, shuffle=True):
 	"""
@@ -43,8 +85,10 @@ def random_tiles(
 	n_subjects: int,
 	nbatches: int,
 	ngroups: int,
-):
+) -> Tiling:
 	"""
+	Partitions outcomes into ``nbatches`` x ``ngroups`` random tiles.
+
 	Parameters
 	----------
 	n_obs : int
@@ -58,10 +102,8 @@ def random_tiles(
 
 	Returns
 	-------
-	tiles : list
-		tiles[i] is a tuple of two integer np.arrays of indices 
-		defining the ith tile. I.e, the mth tile of an array ``data`` 
-		is ``data[tile[i][0]][:, tile[i][1]]``.
+	tiles : mosaicperm.tilings.Tiling
+		The default tiling as a :class:`.Tiling` object.
 	"""
 	# partition along timepoints
 	batches = even_random_partition(n=n_obs, k=nbatches, shuffle=False)
@@ -71,31 +113,37 @@ def random_tiles(
 		groups = even_random_partition(n=n_subjects, k=ngroups, shuffle=True)
 		tiles.extend([(batch, group) for group in groups])
 	# return tiles
-	return tiles
+	return Tiling(tiles)
 
 def default_factor_tiles(
 	exposures: np.array,
 	n_obs: Optional[int]=None,
 	max_batchsize: Optional[int]=10,
 	ngroups: Optional[int]=None,
-):
+) -> Tiling:
 	"""
 	Computes default tiling for factor models.
 
 	Parameters
 	----------
 	exposures : np.array
-		Array of factor exposures. Two input options;
-		- (n_obs, n_subects, n_factors)-shaped array (if the exposures change with time)
-		- (n_subects, n_factors)-shaped array (if the exposures do not change with time)
+		(``n_obs``, ``n_subjects``, ``n_factors``) array of factor exposures
+		OR 
+		(``n_subjects``, ``n_factors``) array of factor exposures if
+		the exposures do not change with time.	
 	n_obs : int
 		Number of timepoints. Optional unless exposures is 2D
 	max_batchsize : int
 		Maximum length (in time) of a tile.
 	ngroups : int
-		Number of groups to partition the subjects/assets into.
-		Defaults to the maximum value such that each group contains
-		5 times as many assets as there are factors.
+		Number of groups to partition the subjects into.
+		Default is the max integer such that each group contains
+		5 times as many subjects as there are factors.
+
+	Returns
+	-------
+	tiles : mosaicperm.tilings.Tiling
+		The default tiling as a :class:`.Tiling` object.
 	"""
 	# Choose batches
 	if len(exposures.shape) == 3:
@@ -119,7 +167,7 @@ def default_factor_tiles(
 	for batch in batches:
 		groups = even_random_partition(n=n_subjects, k=ngroups, shuffle=True)
 		tiles.extend([(batch.astype(int), group.astype(int)) for group in groups])
-	return tiles
+	return Tiling(tiles)
 
 
 def _exposures_to_batches(exposures, max_batchsize=10):

@@ -1,3 +1,4 @@
+import abc
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -10,15 +11,15 @@ def compute_adaptive_pval(
 	null_statistics: np.array,
 ) -> tuple:
 	"""
-	Computes an adaptive p-value based on possibly many test statistics.
+	Computes an adaptive p-value based on one or more test statistics.
 
 	Parameters
 	----------
 	statistic : float or np.array
 		Either a float (one statistic) or 1D array (many test statistics).
 	null_statistics : np.array
-		(nrand, d)-shaped array of null statistics computed based on
-		null permutations, where d is the dimension of ``statistic``.
+		(``nrand``, ``d``)-shaped array of null statistics computed based on
+		null permutations, where ``d`` is the dimension of ``statistic``.
 	
 	Returns
 	-------
@@ -46,7 +47,7 @@ def compute_adaptive_pval(
 	pval = np.sum(adapt_stats[0] <= adapt_stats) / (nrand + 1)
 	return pval, adapt_stats[0], adapt_stats[1:]
 
-class MosaicPermutationTest():
+class MosaicPermutationTest(abc.ABC):
 	"""
 	Generic class meant for subclassing.
 	"""
@@ -73,20 +74,32 @@ class MosaicPermutationTest():
 			self._batchinds[br, gr] = np.arange(counter, counter+len(batch)).reshape(-1, 1)
 			counter += len(batch)
 
+	@abc.abstractmethod
+	def compute_mosaic_residuals(self):
+		"""
+		Computes mosaic-style residual estimates.
+		
+		Returns
+		-------
+		residuals : np.array
+			(``n_obs``, ``n_subjects``)-shaped array of residual estimates.
+		"""
+		raise NotImplementedError()
+
 	def permute_residuals(
 		self, 
-		method: Optional[str]='argsort'
+		method: str='argsort'
 	) -> None:
 		"""
-		Permutes residuals within tiles. Permuted values are stored in self._rtilde
+		Permutes residuals within tiles. Result is stored in ``self._rtilde``.
 
 		Parameters
 		----------
 		method : str
-			One of ['ix', 'argsort']. 
-			- 'ix' is naive and has complexity O(n_subjects * n_obs) but uses
+
+			- 'ix' is naive and has complexity O(``n_subjects`` * ``n_obs``) but uses
 			  a for loop and can be slow in practice.
-			- 'argsort' has complexity O(n_obs log(n_obs) * n_subjects) but 
+			- 'argsort' has complexity O(``n_obs`` log(``n_obs``) * ``n_subjects``) but 
 			  is faster in practice.
 
 		Returns
@@ -112,9 +125,9 @@ class MosaicPermutationTest():
 				gr = group.reshape(1, -1)
 				self._rtilde[br, gr] = self.residuals[br_shuffle, gr]
 
-	def compute_p_value(self, nrand: int, verbose: bool) -> float:
+	def _compute_p_value(self, nrand: int, verbose: bool) -> float:
 		"""
-		Produces underlying mosaic p-value in the ``fit`` method.
+		Produces the underlying mosaic p-value in :meth:`fit`.
 
 		Parameters
 		----------
@@ -150,10 +163,12 @@ class MosaicPermutationTest():
 
 	def fit(
 		self,
-		nrand: Optional[int]=500,
-		verbose: Optional[bool]=True,
+		nrand: int=500,
+		verbose: bool=True,
 	):
 		"""
+		Runs the mosaic permutation test.
+
 		Parameters
 		----------
 		nrand : int
@@ -166,13 +181,14 @@ class MosaicPermutationTest():
 		self : object
 		"""
 		self.compute_mosaic_residuals()
-		self.compute_p_value(nrand=nrand, verbose=verbose)
+		self._compute_p_value(nrand=nrand, verbose=verbose)
 		return self
 
 
-	@property
 	def summary(self, coordinate_index=None):
 		"""
+		Produces an output summarizing the test.
+
 		Parameters
 		----------
 		coordinate_index : pd.Index or np.array
@@ -216,11 +232,11 @@ class MosaicPermutationTest():
 			out.index.name = 'Statistic type'
 			return out
 
-	def compute_p_value_tseries(
-		self, nrand: int, verbose: bool, n_timepoints: int, window: int, 
+	def _compute_p_value_tseries(
+		self, nrand: int, verbose: bool, n_timepoints: int, window: Optional[int], 
 	) -> None:
 		"""
-		Computes the underlying p-values produced in ``fit_tseries``.
+		Computes the underlying p-values in :meth:`fit_tseries`.
 
 		Parameters
 		----------
@@ -281,14 +297,14 @@ class MosaicPermutationTest():
 
 	def fit_tseries(
 		self, 
-		nrand: Optional[int]=500,
-		verbose: Optional[bool]=True, 
-		n_timepoints: Optional[int]=20,
+		nrand: int=500,
+		verbose: bool=True, 
+		n_timepoints: int=20,
 		window: Optional[int]=None, 
 	):
 		"""
-		Iteratively runs the mosaic permutation test for various windows
-		of the data, producing a time series of p-values and test statistics.
+		Runs mosaic permutation tests for various windows of the data,
+		producing a time series of p-values.
 
 		Parameters
 		----------
@@ -307,14 +323,14 @@ class MosaicPermutationTest():
 		self : object
 		"""
 		self.compute_mosaic_residuals()
-		self.compute_p_value_tseries(
+		self._compute_p_value_tseries(
 			nrand=nrand, verbose=verbose, n_timepoints=n_timepoints, window=window
 		)
 		return self
 
 	def plot_tseries(self, time_index=None, alpha=0.05, **subplots_kwargs) -> None:
 		"""
-		
+		Plots the results of :meth:`fit_tseries`.
 
 		Parameters
 		----------

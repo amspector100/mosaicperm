@@ -7,7 +7,7 @@ def ols_residuals(
 	exposures: np.array,
 ):
 	"""
-	Computes OLS residuals based on cross-sectional regressions.
+	Computes residuals via cross-sectional OLS.
 
 	Parameters
 	----------
@@ -39,70 +39,71 @@ def ols_residuals(
 	else:
 		raise ValueError(f"Exposures must be a 2D or 3D array, but has shape {exposures.shape}")
 
-
-class MosaicFactorTest(core.MosaicPermutationTest):
-	"""
-	Parameters
-	----------
+_mosaic_factor_data_doc = """
 	outcomes : np.array
-		(n_obs, n_subjects) array of outcomes, e.g., asset returns.
+		(``n_obs``, ``n_subjects``) array of outcomes, e.g., asset returns.
 		``outcomes`` may contain nans to indicate missing values.
 	exposures : np.array
-		(n_obs, n_subjects, n_factors) array of factor exposures
+		(``n_obs``, ``n_subjects``, ``n_factors``) array of factor exposures
 		OR 
-		(n_subjects, n_factors) array of factor exposures if
+		(``n_subjects``, ``n_factors``) array of factor exposures if
 		the exposures do not change with time.
+"""
+
+
+class MosaicFactorTest(core.MosaicPermutationTest):
+	__doc__ = """
+	Mosaic test for factor models with known exposures.
+
+	Parameters
+	----------
+	{data_doc}
 	test_stat : function
-		A function mapping a (n_obs, n_subjects)-size array of 
-		residuals to one of two options:
+		A function mapping a (``n_obs``, ``n_subjects``)-size 
+		array of residuals to either:
+
 		- A single statistic measuring evidence against the null.
 		- Alternatively, a 1D array of many statistics, in which
 		  case the p-value will adaptively aggregate evidence across
 		  all test statistics.
+
 	test_stat_kwargs : dict
 		Optional kwargs to be passed to ``test_stat``.
-	tiles : list
-		Optional 
+	tiles : mosaicperm.tilings.Tiling
+		An optional :class:`.Tiling` to use as the tiling.
 	**kwargs : dict
-		Optional kwargs to ``tilings.default_factor_tiles``.
+		Optional kwargs to :func:`.default_factor_tiles`.
 		Ignored if ``tiles`` is provided.
 
 	Examples
 	--------
-	Here we fit a mosaic permutation test 
-	based on synthetic data: ::
-		import numpy as np
-		import mosaicperm as mp
+	We run a mosaic permutation test on synthetic data:
 
-		# synthetic outcomes and exposures
-		n_obs, n_subjects, n_factors = 100, 200, 20
-		outcomes = np.random.randn(n_obs, n_subjects)
-		exposures = np.random.randn(n_obs, n_subjects, n_factors)
-		# example of missing data
-		outcomes[0:10][:, 0:5] = np.nan
-		exposures[0:10][:, 0:5] = np.nan
+	>>> import numpy as np
+	>>> import mosaicperm as mp
+	>>> 
+	>>> # synthetic outcomes and exposures
+	>>> n_obs, n_subjects, n_factors = 100, 200, 20
+	>>> outcomes = np.random.randn(n_obs, n_subjects)
+	>>> exposures = np.random.randn(n_obs, n_subjects, n_factors)
+	>>> 
+	>>> # example of missing data
+	>>> outcomes[0:10][:, 0:5] = np.nan
+	>>> exposures[0:10][:, 0:5] = np.nan
+	>>> 
+	>>> # fit mosaic permutation test
+	>>> mpt = mp.factor.MosaicFactorTest(
+	>>> 	outcomes=outcomes,
+	>>> 	exposures=exposures,
+	>>> 	test_stat=mp.statistics.mean_maxcorr_stat,
+	>>> )
+	>>> mpt.fit().summary()
 
-		# fit mosaic permutation test
-		mpt = mp.factor.MosaicFactorTest(
-			outcomes=outcomes,
-			exposures=exposures,
-			test_stat=mp.statistics.mean_maxcorr_stat,
-		)
-		print(mpt.fit().summary())
+	We can also produce a time series plot of this analysis:
 
-		# produce a time series plot of this analysis
-		mpt.fit_tseries(
-			nrand=100, n_timepoints=20,
-		).plot_tseries()
+	>>> mpt.fit_tseries(nrand=100, n_timepoints=20).plot_tseries()
 
-		# repeat using adaptive test statistic
-		mpt2 = mp.factor.MosaicFactorTest(
-			outcomes=outcomes,
-			exposures=exposures,
-			test_stat=mp.statistics.quantile_maxcorr_stat,
-		)
-		print(mpt2.fit().summary())
-	"""
+	""".format(data_doc=_mosaic_factor_data_doc)
 
 	def __init__(
 		self,
@@ -146,15 +147,7 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 		# initialize
 		super().__init__()
 
-	def compute_mosaic_residuals(self):
-		"""
-		Computes mosaic-style residual estimates.
-		
-		Returns
-		-------
-		residuals : np.array
-			(n_obs, n_subjects)-shaped array of residual estimates.
-		"""
+	def compute_mosaic_residuals(self) -> np.array:
 		self.residuals = np.zeros(self.outcomes.shape)
 		for tile in self.tiles:
 			batch, group = tile
@@ -189,13 +182,24 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 		return self.residuals
 
 class MosaicBCV(MosaicFactorTest):
-	"""
-	Mosaic factor test based on a split bi-cross validation statistic.
+	__doc__ = """
+	Mosaic factor test based on :func:`mosaicperm.statistics.adaptive_mosaic_bcv_stat`
 
 	Parameters
 	----------
-	TODO
-	"""
+	{data_doc}
+	new_exposures : np.array or list
+		(``n_models``, ``n_subject``)-shaped array 
+		such that ``new_exposures[i]`` is an array
+		of new exposures.		
+	tiles : mosaicperm.tilings.Tiling
+		An optional :class:`.Tiling` to use as the tiling.
+	**kwargs : dict
+		Optional kwargs to :func:`.default_factor_tiles`.
+		Ignored if ``tiles`` is provided.
+	""".format(
+		data_doc=_mosaic_factor_data_doc,
+	)
 
 	def __init__(
 		self,
