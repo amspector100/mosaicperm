@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 from . import tilings, utilities, core, statistics
 from typing import Optional
 
@@ -93,15 +94,16 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 	>>> 
 	>>> # fit mosaic permutation test
 	>>> mpt = mp.factor.MosaicFactorTest(
-	>>> 	outcomes=outcomes,
-	>>> 	exposures=exposures,
-	>>> 	test_stat=mp.statistics.mean_maxcorr_stat,
+	... 	outcomes=outcomes,
+	... 	exposures=exposures,
+	... 	test_stat=mp.statistics.mean_maxcorr_stat,
 	>>> )
 	>>> mpt.fit().summary()
 
 	We can also produce a time series plot of this analysis:
 
-	>>> mpt.fit_tseries(nrand=100, n_timepoints=20).plot_tseries()
+	>>> mpt.fit_tseries(nrand=100, n_timepoints=20)
+	>>> fig, ax = mpt.plot_tseries()
 
 	""".format(data_doc=_mosaic_factor_data_doc)
 
@@ -115,6 +117,10 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 		**kwargs,
 	):
 		# Data
+		if isinstance(outcomes, pd.DataFrame):
+			outcomes = outcomes.values
+		if isinstance(exposures, pd.DataFrame):
+			exposures = exposures.values
 		self.outcomes = outcomes.copy()
 		self.exposures = exposures.copy()
 		# Remove nans
@@ -197,6 +203,31 @@ class MosaicBCV(MosaicFactorTest):
 	**kwargs : dict
 		Optional kwargs to :func:`.default_factor_tiles`.
 		Ignored if ``tiles`` is provided.
+
+	Examples
+	--------
+
+	>>> import numpy as np
+	>>> import mosaicperm as mp
+	>>> 
+	>>> # synthetic outcomes and exposures
+	>>> n_obs, n_subjects, n_factors = 100, 200, 20
+	>>> outcomes = np.random.randn(n_obs, n_subjects)
+	>>> exposures = np.random.randn(n_obs, n_subjects, n_factors)
+	>>> 
+	>>> # estimate candidate exposures on the first half of the data
+	>>> n0 = int(0.5 * n_obs)
+	>>> resid0 = mp.factor.ols_residuals(outcomes[0:n0], exposures[0:n0])
+	>>> new_exposures = mp.statistics.approximate_sparse_pcas(np.corrcoef(resid0.T))
+	>>> 
+	>>> # fit mosaic permutation test
+	>>> mpt_bcv = mp.factor.MosaicFactorTest(
+	... 	outcomes=outcomes[n0:],
+	... 	exposures=exposures[n0:],
+	... 	new_exposures=new_exposures,
+	>>> )
+	>>> mpt_bcv.fit().summary()
+
 	""".format(
 		data_doc=_mosaic_factor_data_doc,
 	)
@@ -219,3 +250,10 @@ class MosaicBCV(MosaicFactorTest):
 		self.test_stat = statistics.adaptive_mosaic_bcv_stat
 		self.tstat_kwargs['tiles'] = self.tiles
 		self.tstat_kwargs['new_exposures'] = self.new_exposures
+
+	def summary(self, *args, **kwargs):
+		if 'coordinate_index' not in kwargs:
+			kwargs['coordinate_index'] = [
+				fr"$R^2$ for candidate model {i}" for i in range(len(self.new_exposures))
+			]
+		return super().summary(*args, **kwargs)

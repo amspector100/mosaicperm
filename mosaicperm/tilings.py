@@ -41,6 +41,8 @@ class Tiling(list):
 	tiles : list
 		List of tuples of two integer np.arrays. E.g., tile 
 		``i`` of an array is ``data[tile[i][0]][:, tile[i][1]]``.
+	check_valid : bool
+		If True, runs :func:`check_valid_tiling` during initialization.
 
 	Raises
 	------
@@ -48,13 +50,44 @@ class Tiling(list):
 		product of ``{0, ..., n}`` x ``{0, ..., k}`` for some integers
 		``n`` and ``k``. 
 
+	Examples
+	--------
+
+	>>> import numpy as np
+	>>> import mosaicperm as mp
+	>>> 
+	>>> # a valid tiling of {0, 1} x {0, 1, 2, 3}
+	>>> tiles0 = [
+	...		(np.array([0]), np.array([0, 2])),
+	... 	(np.array([0]), np.array([1, 3])),
+	...		(np.array([1]), np.array([0, 1])),
+	... 	(np.array([1]), np.array([2, 3])),
+	... ]
+	>>> tiling = mp.tilings.Tiling(tiles0, check_valid=True)
+
+	>>> # an invalid tiling due to repeats
+	>>> tiles1 = [
+	...		(np.array([0, 2]), np.array([0, 1])),
+	... 	(np.array([1]), np.array([0, 1])),
+	...		(np.array([0]), np.array([1])),
+	... ]
+	>>> tiling = mp.tilings.Tiling(tiles1, check_valid=True)
+	Traceback (most recent call last):
+		...
+	ValueError: Tile 2 is not disjoint from tiles 0-1.
+
+
+
+
+
 	Notes
 	-----
 	This class thinly wraps python ``list``. 
 	"""
 
-	def __init__(self, tiles: list):
-		check_valid_tiling(tiles)
+	def __init__(self, tiles: list, check_valid: bool=False):
+		if check_valid:
+			check_valid_tiling(tiles)
 		super().__init__(tiles)
 		
 	def __str__(self, *args, **kwargs):
@@ -226,3 +259,8 @@ def _exposures_to_batches(exposures, max_batchsize=10):
 			i += 1
 
 	return [batch.astype(int) for batch in batches]
+
+
+if __name__ == "__main__":
+	import doctest
+	doctest.testmod()

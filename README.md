@@ -12,7 +12,7 @@ Documentation and tutorials are available at https://amspector100.github.io/mosa
 
 # Quickstart
 
-To be written.
+Below, we give a simple example showing how to use ``mosaicperm`` to test whether a set of factor exposures explain the correlations among a matrix of outcomes variables.
 
 ```
 	import numpy as np
@@ -38,12 +38,6 @@ To be written.
 	mpt.fit_tseries(
 		nrand=100, n_timepoints=20,
 	).plot_tseries()
-
-	# repeat using adaptive test statistic
-	mpt2 = mp.factor.MosaicFactorTest(
-		outcomes=outcomes,
-		exposures=exposures,
-		test_stat=mp.statistics.quantile_maxcorr_stat,
-	)
-	print(mpt2.fit().summary())
 ```
+
+See the [documentation](https://amspector100.github.io/mosaicperm/) for more details.

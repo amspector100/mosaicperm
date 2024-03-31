@@ -225,7 +225,7 @@ class MosaicPermutationTest(abc.ABC):
 			)
 			adapt_out = pd.DataFrame(
 				[[self.adapt_stat, self.null_adapt_stats.mean(), self.pval]],
-				index=['Adaptive'],
+				index=['Adaptive z-stat'],
 				columns=fields,
 			)
 			out = pd.concat([adapt_out, marg_out], axis='index')
@@ -328,7 +328,13 @@ class MosaicPermutationTest(abc.ABC):
 		)
 		return self
 
-	def plot_tseries(self, time_index=None, alpha=0.05, **subplots_kwargs) -> None:
+	def plot_tseries(
+		self, 
+		time_index=None,
+		alpha: float=0.05,
+		show_plot: bool=True,
+		**subplots_kwargs
+	) -> None:
 		"""
 		Plots the results of :meth:`fit_tseries`.
 
@@ -338,21 +344,26 @@ class MosaicPermutationTest(abc.ABC):
 			n_obs-length index information (e.g. datetimes) for each observation.
 		alpha : float
 			Nominal level.
+		show_plot : bool	
+			If True, runs ``matplotlib.pyplot.show()``.
 		**subplots_kwargs : dict
 			kwargs for ``plt.subplots()``, e.g., ``figsize``.
 
 		Returns
 		-------
-		None : NoneType
+		fig : :class:`matplotlib.Figure`
+			The figure from the ``plt.subplots()`` call.
+		ax: array of :class:`matplotlib.Axes`
+			Axes from the ``plt.subplots()`` call.
 		"""
 		# Create plot and x-values
 		import matplotlib.pyplot as plt
 		subplots_kwargs['figsize'] = subplots_kwargs.get("figsize", (12, 6)) # default
 		fig, axes = plt.subplots(1, 2, **subplots_kwargs)
 		if time_index is None:
-			xvals = self.ends
+			xvals = self.ends-1
 		else:
-			xvals = time_index[self.ends]
+			xvals = time_index[self.ends-1]
 
 		# Subplot 1: p-value
 		zvals = np.maximum(stats.norm.ppf(1-self.pval_tseries), 0)
@@ -366,6 +377,7 @@ class MosaicPermutationTest(abc.ABC):
 		)
 		axes[0].set(xlabel='Time', ylabel=r'Z-statistic: $\Phi(1-p)_+$')
 		axes[0].legend()
+		axes[0].set_ylim(0)
 		# Subplot 2: statistic value and quantile
 		if self.stats_tseries.shape[1] == 1:
 			ystat = self.stats_tseries[:, 0]
@@ -392,4 +404,7 @@ class MosaicPermutationTest(abc.ABC):
 		axes[1].scatter(xvals, yquant, color='orangered')
 		axes[1].set(xlabel='Time', ylabel='Statistic value')
 		axes[1].legend()
-		plt.show()
+		if show_plot:
+			plt.show()
+		else:
+			return fig, axes

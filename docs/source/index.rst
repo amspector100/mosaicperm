@@ -9,6 +9,8 @@ The mosaic permutation test is an exact and nonparametric test of the goodness-o
    :caption: Contents:
 
    installation
+   quickstart
+   factor_tutorial.ipynb
    apiref
 
 

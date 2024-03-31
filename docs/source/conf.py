@@ -43,8 +43,8 @@ extensions = [
     # automatic documentation
     ## Option 1:
     # ensures one page per class/function
-    'sphinx_automodapi.automodapi',
-    'sphinx_automodapi.smart_resolver',
+    #'sphinx_automodapi.automodapi',
+    #'sphinx_automodapi.smart_resolver',
     # Option 2: just use autosummary from autodoc
 ]
 
@@ -56,7 +56,8 @@ numpydoc_show_class_members = False
 autosummary_generate = True
 
 # This changes the code style
-pygments_style = 'colorful'
+pygments_style = 'default'
+pygments_dark_style = "monokai"
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
