@@ -14,7 +14,6 @@ author = 'Asher Spector'
 # Import the right package!
 import sys
 import os
-import sphinx_rtd_theme
 sys.path.insert(0, os.path.abspath('../../'))
 
 # The full version, including alpha/beta/rc tags
@@ -37,7 +36,7 @@ extensions = [
     'sphinx.ext.coverage',
     'sphinx.ext.mathjax',
     'sphinx.ext.viewcode',
-    'sphinx.ext.githubpages',
+    #'sphinx.ext.githubpages',
     #'sphinx_multiversion',
     # "sphinx_immaterial",
     # automatic documentation
