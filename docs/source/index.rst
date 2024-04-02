@@ -12,6 +12,7 @@ The mosaic permutation test is an exact and nonparametric test of the goodness-o
    quickstart
    factor_tutorial.ipynb
    apiref
+   mosaicperm source <https://github.com/amspector100/mosaicperm>
 
 
 Indices and tables
