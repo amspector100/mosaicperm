@@ -8,7 +8,7 @@ To install ``mosaicperm``, just use pip:
 
 # Documentation
 
-Documentation and tutorials are available at https://amspector100.github.io/mosaicperm/.
+Documentation and tutorials are available at https://mosaicperm.readthedocs.io/.
 
 # Quickstart
 
@@ -40,4 +40,4 @@ Below, we give a simple example showing how to use ``mosaicperm`` to test whethe
 	).plot_tseries()
 ```
 
-See the [documentation](https://amspector100.github.io/mosaicperm/) for more details.
+See the [documentation](https://mosaicperm.readthedocs.io/) for more details.
