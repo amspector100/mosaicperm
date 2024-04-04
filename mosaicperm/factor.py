@@ -187,6 +187,17 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 		self._rtilde = self.residuals.copy()
 		return self.residuals
 
+
+def _window_sum(x: np.array, window: Optional[int]):
+	"""
+	Returns np.cumsum(x) if window is None. 
+	Else, returns np.convolve(x, np.ones(window), 'valid').
+	"""
+	if window is None:
+		return np.cumsum(x)
+	else:
+		return np.convolve(x, np.ones(window), 'valid')
+
 class MosaicBCV(MosaicFactorTest):
 	__doc__ = """
 	Mosaic factor test based on :func:`mosaicperm.statistics.adaptive_mosaic_bcv_stat`
@@ -257,3 +268,56 @@ class MosaicBCV(MosaicFactorTest):
 				fr"$R^2$ for candidate model {i}" for i in range(len(self.new_exposures))
 			]
 		return super().summary(*args, **kwargs)
+
+
+	def _compute_p_value_tseries(
+		self, nrand: int, verbose: bool, n_timepoints: int, window: Optional[int],
+	):
+		# Note:
+		# The docs/signature are inherited from the core MosaicFactorTest class.
+		# oos_r2s
+		new_exposures = self.tstat_kwargs['new_exposures']
+		tiles = self.tstat_kwargs['tiles']
+		mus = self.tstat_kwargs.get("mus", None)
+		if mus is None:
+			mus = self.residuals.mean(axis=0)
+
+		n_models = len(new_exposures)
+		active = np.any(new_exposures != 0, axis=0) # actuve features
+		baseline = _window_sum(np.sum(self.residuals[:, active]**2, axis=1), window=window)
+		
+		_stats = np.zeros((len(baseline), nrand+1, n_models))
+		# Initialize so _stats[:, 0] is the true statistic. 
+		self._rtilde = self.residuals.copy()
+		for r in utilities.vrange(nrand+1, verbose=verbose):
+			for i in range(n_models):
+				oos_resids = statistics._bcv_oos_resids(
+					self._rtilde, new_exposure=new_exposures[i], tiles=tiles, mus=mus
+				)
+				oos_l2s = np.sum(oos_resids[:, active]**2, axis=1) # n_obs length array
+				oos_errors = _window_sum(oos_l2s, window=window)
+				_stats[:, r, i] = 1 - oos_errors / baseline
+			# Permute
+			self.permute_residuals()
+
+		# compute adaptive p-value and put everything in the right place
+		self.null_tseries = _stats[:, 1:]
+		self.stats_tseries = _stats[:, 0]
+		self.adapt_stats_tseries = np.zeros(len(baseline))
+		self.null_adapt_tseries = np.zeros((len(baseline), nrand))
+		self.pval_tseries = np.zeros(len(baseline))
+		for i in range(len(baseline)):
+			out = core.compute_adaptive_pval(
+				self.stats_tseries[i], self.null_tseries[i]
+			)
+			self.pval_tseries[i] = out[0]
+			self.adapt_stats_tseries[i] = out[1]
+			self.null_adapt_tseries[i] = out[2]
+
+		# create self.starts/self.ends to signal indices of output
+		if window is not None:
+			self.starts = np.arange(0, self.n_obs - window + 1)
+			self.ends = np.arange(window, self.n_obs + 1)
+		else:
+			self.starts = np.zeros(self.n_obs)
+			self.ends = np.arange(1, self.n_obs+1)

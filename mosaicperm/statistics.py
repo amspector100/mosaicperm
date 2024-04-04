@@ -79,6 +79,39 @@ def quantile_maxcorr_stat(
 	# return mean max corr
 	return np.quantile(maxcorrs, qs)
 
+def _bcv_oos_resids(
+	residuals: np.array, 
+	new_exposure: np.array, 
+	tiles: list, 
+	mus: Optional[np.array]=None,
+):
+	"""
+	Computes ``n_obs`` x ``n_subjects`` matrix of 
+	out-of-sample residuals for the mosaic BCV stat. 
+	"""
+	n_obs, n_subjects = residuals.shape
+	oos_resids = np.zeros(residuals.shape)
+	new_exposure_l2 = np.sum(new_exposure**2)
+	if mus is None:
+		mus = residuals.mean(axis=0)
+	# Loop through tiles
+	for (batch, group) in tiles:
+		# All subjects not in the group
+		neggroup = np.ones(n_subjects, dtype=bool)
+		neggroup[group] = False
+		#Predict factor returns for new exposure
+		hatZ = residuals[np.ix_(batch, neggroup)] @ new_exposure[neggroup]
+		hatZ += mus[group] @ new_exposure[group]
+		hatZ /= new_exposure_l2
+		# Predict residuals for this tile
+		preds = hatZ.reshape(-1, 1) * new_exposure[group].reshape(1, -1)
+		oos_resids[np.ix_(batch, group)] = residuals[np.ix_(batch, group)] - preds
+
+	return oos_resids
+
+
+
+
 def mosaic_bcv_stat(
 	residuals: np.array, 
 	new_exposure: np.array, 
@@ -107,27 +140,9 @@ def mosaic_bcv_stat(
 	r2 : float
 		Mosaic bi-cross validation out-of-sample R^2. 
 	"""
-	# Initialize
-	n_obs, n_subjects = residuals.shape
-	oos_l2 = 0
-	new_exposure_l2 = np.sum(new_exposure**2)
-	if mus is None:
-		mus = residuals.mean(axis=0)
-	# Loop through tiles
-	for (batch, group) in tiles:
-		# All subjects not in the group
-		neggroup = np.ones(n_subjects, dtype=bool)
-		neggroup[group] = False
-		#Predict factor returns for new exposure
-		hatZ = residuals[np.ix_(batch, neggroup)] @ new_exposure[neggroup]
-		hatZ += mus[group] @ new_exposure[group]
-		hatZ /= new_exposure_l2
-		# Predict residuals for this tile
-		preds = hatZ.reshape(-1, 1) * new_exposure[group].reshape(1, -1)
-		oos_l2 += np.sum((residuals[np.ix_(batch, group)] - preds)**2)
-
+	oos_resids = _bcv_oos_resids(residuals, new_exposure=new_exposure, tiles=tiles, mus=mus)
 	# Return R^2
-	return 1 - oos_l2 / np.sum(residuals**2)
+	return 1 - np.sum(oos_resids**2) / np.sum(residuals**2)
 
 def adaptive_mosaic_bcv_stat(
 	residuals: np.array,
@@ -192,7 +207,7 @@ def approximate_sparse_pcas(
 	"""
 	p_orig = len(Sigma)
 	# ignore assets with zero variance
-	subset = np.where(np.diag(Sigma) > 1e-5)[0]
+	subset = np.where(np.diag(Sigma) > 1e-8)[0]
 	p = len(subset)
 	Sig = Sigma[np.ix_(subset, subset)]
 	scale = np.sqrt(np.diag(Sig))
