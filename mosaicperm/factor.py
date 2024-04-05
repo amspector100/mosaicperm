@@ -72,6 +72,13 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 		Optional kwargs to be passed to ``test_stat``.
 	tiles : mosaicperm.tilings.Tiling
 		An optional :class:`.Tiling` to use as the tiling.
+	clusters : np.array
+		An optional ``n_subject``-length array where 
+		``clusters[i] = k`` signals that subject i is in the
+		kth cluster. If ``tiles`` is not provided, this argument
+		allows one to test the null that the residuals are independent
+		between clusters but possibly dependent within clusters.
+		If ``tiles`` is  provided, this argument is ignored.
 	**kwargs : dict
 		Optional kwargs to :func:`.default_factor_tiles`.
 		Ignored if ``tiles`` is provided.
@@ -114,6 +121,7 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 		test_stat: callable,
 		test_stat_kwargs: Optional[dict]=None,
 		tiles: Optional[list]=None, 
+		clusters: Optional[np.array]=None,
 		**kwargs,
 	):
 		# Data
@@ -143,11 +151,13 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 		if self.tstat_kwargs is None:
 			self.tstat_kwargs = {}
 		# Tiles
+		self.clusters = clusters
 		self.tiles = tiles
 		if self.tiles is None:
 			self.tiles = tilings.default_factor_tiles(
 				exposures=self.exposures,
 				n_obs=len(self.outcomes),
+				clusters=self.clusters,
 				**kwargs
 			)
 		# initialize

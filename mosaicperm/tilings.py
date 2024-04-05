@@ -113,6 +113,91 @@ def even_random_partition(n, k, shuffle=True):
 		np.where(groups == ell)[0] for ell in range(k)
 	]
 
+def _preprocess_partition(partition):
+	"""
+	Preprocesses a partition so that its groups are numbered
+	0 through k, for some k.
+	"""
+	vals = np.unique(partition)
+	output = np.zeros(len(partition), dtype=int)
+	for i, v in enumerate(vals):
+		output[partition == v] = i
+	return output
+
+
+def coarsify_partition(
+	partition: np.array, 
+	k: int, 
+	minsize: int=0, 
+	random: bool=False
+):
+	"""
+	Produces a random coarsening of ``partition``.
+
+	Parameters
+	----------
+	partition : array
+		n-length integer array, so that ``partition[i] = l``
+		implies that item i is in group l of the partition. 
+	k : int
+		Desired number of elements of the coarsened partition.
+	minsize : int
+		Minimum number of elements in each set in the coarsened partition.
+	random : bool
+		If true, produces a randomized coarsening. Otherwise returns
+		a deterministic result.
+
+	Returns
+	-------
+	partition : array
+		n-length integer array containing values 0 through k-1, 
+		so that ``partition[i] = l`` implies that item i is 
+		in group l of the partition. 
+	"""
+	# note: this copies partition so the results are never in-place
+	partition = _preprocess_partition(partition)
+	# number of groups to start
+	kstart = np.max(partition) + 1
+	inds = np.arange(kstart)
+	# precompute sizes of each partition
+	sizes = np.array([np.sum(partition==k) for k in np.unique(partition)]).astype(float)
+	sizes[sizes == 0] = np.inf
+	for _ in range(kstart-1):
+		# Compute sizes
+		# sizes = np.array([np.sum(partition==k) for k in range(kstart)]).astype(float)
+		# sizes[sizes == 0] = np.inf
+		# Check stopping condition
+		if np.all(sizes >= minsize) and len(sizes[sizes < np.inf]) <= k:
+			break
+		
+		## Random variant
+		if random:
+			# Sampling probs
+			probs = 1 / sizes
+			# three cases based on the number of groups below minsize
+			n_too_small = np.sum(sizes < minsize)
+			if n_too_small == 1:
+				# Case 1: merge the smallest with another
+				i0 = np.where(sizes < minsize)[0].item()
+				probs[i0] = 0; probs /= probs.sum()
+				i1 = np.random.choice(inds, p=probs, size=1).item()
+			else:
+				# Case 2: only merge groups below minsize
+				if n_too_small > 1:
+					probs[sizes >= minsize] = 0
+				# Case 3: probs are undajusted (no groups below minsize)
+				probs /= probs.sum()
+				i0, i1 = np.random.choice(inds, p=probs, size=2, replace=False)
+		else:
+			i0, i1 = np.argpartition(sizes, 2)[:2]
+		
+		# Sample and merge
+		sizes[i0] += np.sum(partition == i1)
+		sizes[i1] = np.inf
+		partition[partition == i1] = i0
+
+	return _preprocess_partition(partition)
+
 def random_tiles(
 	n_obs: int,
 	n_subjects: int,
@@ -153,6 +238,7 @@ def default_factor_tiles(
 	n_obs: Optional[int]=None,
 	max_batchsize: Optional[int]=10,
 	ngroups: Optional[int]=None,
+	clusters: Optional[np.array]=None,
 ) -> Tiling:
 	"""
 	Computes default tiling for factor models.
@@ -172,6 +258,11 @@ def default_factor_tiles(
 		Number of groups to partition the subjects into.
 		Default is the max integer such that each group contains
 		5 times as many subjects as there are factors.
+	clusters : np.array
+		An ``n_subjects``-length array of cluster_ids, so 
+		``clusters[i] = k`` implies subject i is in the kth cluster.
+		If clusters is provided, the output will preserve the cluster
+		structure.
 
 	Returns
 	-------
@@ -196,9 +287,16 @@ def default_factor_tiles(
 	# Partition subjects and construct tiles
 	if ngroups is None:
 		ngroups = max(2, int(np.ceil(n_subjects / (5*n_factors))))
+
 	tiles = []
 	for batch in batches:
-		groups = even_random_partition(n=n_subjects, k=ngroups, shuffle=True)
+		# Create groups
+		if clusters is None:
+			groups = even_random_partition(n=n_subjects, k=ngroups, shuffle=True)
+		else:
+			coarsened = coarsify_partition(clusters, k=ngroups, minsize=2*n_factors)
+			groups = [np.where(coarsened == k)[0] for k in np.unique(coarsened)]
+		# Add to tiles
 		tiles.extend([(batch.astype(int), group.astype(int)) for group in groups])
 	return Tiling(tiles)
 

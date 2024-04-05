@@ -14,7 +14,7 @@ except ImportError:
 
 class TestTiles(unittest.TestCase):
 	"""
-	tests tiling functions
+	tests generic tiling functions
 	"""
 	def test_random_tiles(self):
 		np.random.seed(123)
@@ -111,3 +111,109 @@ class TestTiles(unittest.TestCase):
 		exposures = np.random.randn(10, 2)
 		tiles = mp.tilings.default_factor_tiles(exposures, n_obs=20, max_batchsize=8)
 		mp.tilings.check_valid_tiling(tiles)
+
+class TestClusteredTilings(unittest.TestCase):
+
+	def test_preprocess_partition(self):
+		n = 10
+		for maxval in [2, 3, 5, 10, 20, 50, 1000, None]:
+			if maxval is not None:
+				x = np.random.randint(low=0, high=maxval, size=n)
+			else:
+				x = np.random.randn(n)
+			# Test size
+			y = mp.tilings._preprocess_partition(x)
+			self.assertTrue(
+				len(np.unique(y)) == len(np.unique(x)),
+				f"_preprocess_partition does not preserve # of partitions with x={x}, y={y}"
+			)
+			# Test support
+			np.testing.assert_array_almost_equal(
+				np.sort(np.unique(y)),
+				np.arange(len(np.unique(y))),
+				decimal=5,
+				err_msg=f"output of _preprocess_partition has support {np.unique(y)}"
+			)
+			# Test preserves group structure
+			for k in np.unique(y):
+				sub = x[y == k]
+				self.assertTrue(
+					np.all(sub == sub[0]),
+					f"_preprocess_partition does not preserve structure: x[y=={k}] = {sub}"
+				)
+
+	def test_coarsify_partition(self):
+		"""
+		Tests that the random coarsening does correctly produces a coarsening.
+		"""
+		n = 200
+		for maxval in [5, 10, 50, 10000]:
+			for k in [2, 5, 10, 20]:
+				x = np.random.randint(low=0, high=maxval, size=n)
+				kstart = len(np.unique(x))	
+				for minsize in [2, 5, 8]:
+					for random in [False, True]:
+						y = mp.tilings.coarsify_partition(
+							x, k=k, minsize=minsize, random=True,
+						)
+						# Check the minsize condition
+						sizes = np.array([np.sum(y == ell) for ell in np.unique(y)])
+						self.assertTrue(
+							np.min(sizes) >= minsize,
+							f"Sizes {sizes} contains a size smaller than minsize={minsize}"
+						)
+						# Check that y is a coarsening of x
+						for ell in np.unique(x):
+							sub = y[x == ell]
+							self.assertTrue(
+								np.all(sub == sub[0]),
+								f"y is not a subpartition of x with y[x == ell] = {sub}"
+							)
+
+	def test_nonrandom_coarsify_partition(self):
+		"""
+		Tests that the nonrandom coarsening is deterministic.
+		"""
+		for r in range(1, 10):
+			np.random.seed(r)
+			x = np.random.randint(low=0, high=10, size=200)
+			kwargs = dict(partition=x, k=20, minsize=5, random=False)
+			y0 = mp.tilings.coarsify_partition(**kwargs)
+			y1 = mp.tilings.coarsify_partition(**kwargs)
+			np.testing.assert_array_almost_equal(
+				y0, 
+				y1,
+				decimal=5,
+				err_msg=f"coarsify_partition produces random outputs with random=False"
+			)
+
+	def test_clustered_factor_tiles(self):
+		"""
+		Tests that default_factor_tiles() produces a good clustering
+		"""
+		np.random.seed(123)
+		# Create outcomes/exposures
+		n_obs, n_subjects, n_factors, nstart = 100, 200, 5, 20
+		#outcomes = np.random.randn(n_obs, n_subjects)
+		exposures = context._create_exposures(
+			n_obs=n_obs, n_subjects=n_subjects, n_factors=n_factors, nstart=nstart
+		)
+		# Create clusters
+		clusters = np.random.randint(0, 100, n_subjects)
+		# create tiling
+		tiles = mp.tilings.default_factor_tiles(
+			exposures=exposures, n_obs=n_obs, clusters=clusters
+		)
+		for (batch, group) in tiles:
+			# Test that each group is a union of clusters
+			group_clust = np.unique(clusters[group])
+			neg_group = np.array([i for i in range(n_subjects) if i not in group])
+			self.assertTrue(
+				np.sum([np.sum(clusters[neg_group] == k) for k in group_clust]) == 0,
+				f"group={group} is not a union of clusters={clusters}"
+			)
+			# Test that each group has the right size
+			self.assertTrue(
+				len(group) >= 2*n_factors,
+				f"group={group} has <= 2*n_factors elements"
+			)
