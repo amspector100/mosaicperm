@@ -77,21 +77,76 @@ class Tiling(list):
 	ValueError: Tile 2 is not disjoint from tiles 0-1.
 
 
-
-
-
 	Notes
 	-----
 	This class thinly wraps python ``list``. 
 	"""
 
 	def __init__(self, tiles: list, check_valid: bool=False):
+		self.tiles = tiles
 		if check_valid:
 			check_valid_tiling(tiles)
 		super().__init__(tiles)
 		
 	def __str__(self, *args, **kwargs):
 		return "Tiling" + super().__str__(*args, **kwargs)
+
+	def save(self, filename):
+		"""
+		Saves the tiling to ``filename.npy``.
+		"""
+		# The save format is an integer numpy array.
+		# 1. The first element is an integer ``nbreaks``
+		# 2. The next ``nbreaks`` elements specify the breaks of the (batch, group)
+		# 3. The rest of the elements are a concatenation of the tiling
+		# Form concatenation and count breaks
+		comb = []
+		breaks = [0]
+		counter = 0
+		for batch, group in self.tiles:
+			for obj in [batch, group]:
+				comb.append(obj)
+				counter += len(obj)
+				breaks.append(counter)
+		# Concatenate
+		comb = np.concatenate(comb)
+		breaks = np.array(breaks)
+		tosave = np.concatenate([np.array([len(breaks)]), breaks, comb]).astype(np.int64)
+		np.save(filename, tosave)
+		return None
+
+	@classmethod
+	def load(cls, filename, **kwargs):
+		"""
+		Loads a tiling from a .npy file. 
+
+		Parameters
+		----------
+		filename : str
+			File where the tiling is stored.
+		kwargs : dict
+			Other kwargs for ``__init__``.
+
+		Notes
+		-----
+		The .npy file must have been generated using 
+		:method:`save` or this method will not work.
+		"""
+		raw = np.load(filename)
+		# 1. The length of the array of breaks
+		breaksize = raw[0]
+		# 2. The breaks
+		breaks = raw[1:(breaksize+1)]
+		objsraw = raw[(breaksize+1):]
+		# 3. Loop through and load objects
+		objs = []
+		for j in range(breaksize - 1):
+			objs.append(objsraw[breaks[j]:breaks[j+1]])
+		# 4. Pair the appropriate batches/groups
+		tiles = []
+		for jj in range(int(len(objs) / 2)):
+			tiles.append((objs[2*jj], objs[2*jj+1]))
+		return cls(tiles, **kwargs)
 
 def even_random_partition(n, k, shuffle=True):
 	"""
@@ -105,10 +160,11 @@ def even_random_partition(n, k, shuffle=True):
 		If True, shuffles before partitioning 
 		to produce a uniformly random partition.
 	"""
-	inds = np.arange(n)
+	if k > n:
+		raise ValueError(f"k={k} > n={n}")
+	groups = np.sort(np.arange(n) % k)
 	if shuffle:
-		np.random.shuffle(inds)
-	groups = inds // (np.ceil(n / k))
+		np.random.shuffle(groups)
 	return [
 		np.where(groups == ell)[0] for ell in range(k)
 	]
@@ -129,7 +185,7 @@ def coarsify_partition(
 	partition: np.array, 
 	k: int, 
 	minsize: int=0, 
-	random: bool=False
+	random: bool=True,
 ):
 	"""
 	Produces a random coarsening of ``partition``.
