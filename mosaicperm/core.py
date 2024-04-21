@@ -232,6 +232,57 @@ class MosaicPermutationTest(abc.ABC):
 			out.index.name = 'Statistic type'
 			return out
 
+	def summary_plot(self, show_plot=False, **subplots_kwargs):
+		"""
+		Produces a plot summarizing the results of the test.
+
+		Parameters
+		----------
+		show_plot : bool
+			If true, shows the plot.
+		**subplots_kwargs : dict
+			kwargs for ``plt.subplots()``, e.g., ``figsize``.
+
+		Returns
+		-------
+		fig : :class:`matplotlib.Figure`
+			The figure from the ``plt.subplots()`` call.
+		ax: array of :class:`matplotlib.Axes`
+			Axes from the ``plt.subplots()`` call.
+		"""
+		import matplotlib.pyplot as plt
+		import seaborn as sns
+		fig, ax = plt.subplots(**subplots_kwargs)
+		d = self.null_statistics.shape[1]
+		if d == 1:
+			nstats = self.null_statistics
+			stat = self.statistic
+		else:
+			stat = self.adapt_stat
+			nstats = self.null_adapt_stats
+		sns.histplot(
+			nstats, 
+			label='Null statistics',
+			color='cornflowerblue',
+			alpha=0.5,
+			ax=ax,
+		)
+		zstat = str(np.around((stat - nstats.mean()) / nstats.std(), 2))
+		if self.pval < 1e-3:
+			pval = "{:e}".format(self.pval)
+		else:
+			pval = str(np.around(self.pval, 3))
+		# formatting for p-value
+		ax.axvline(
+			stat, 
+			color='red',
+			label=f'Observed statistic\n(Z={zstat}, pval={pval})',
+		)
+		plt.legend()
+		if show_plot:
+			plt.show()
+		return fig, ax
+
 	def _compute_p_value_tseries(
 		self, nrand: int, verbose: bool, n_timepoints: int, window: Optional[int], 
 	) -> None:
@@ -333,7 +384,7 @@ class MosaicPermutationTest(abc.ABC):
 		time_index=None,
 		alpha: float=0.05,
 		show_plot: bool=True,
-		**subplots_kwargs
+		**figure_kwargs
 	) -> None:
 		"""
 		Plots the results of :meth:`fit_tseries`.
@@ -346,11 +397,13 @@ class MosaicPermutationTest(abc.ABC):
 			Nominal level.
 		show_plot : bool	
 			If True, runs ``matplotlib.pyplot.show()``.
-		**subplots_kwargs : dict
-			kwargs for ``plt.subplots()``, e.g., ``figsize``.
+		**figure_kwargs : dict
+			kwargs for ``plt.figure()``, e.g., ``figsize``.
 
 		Returns
 		-------
+		None : NoneType
+			Returns None if show_plot=True. Else returns the following.
 		fig : :class:`matplotlib.Figure`
 			The figure from the ``plt.subplots()`` call.
 		ax: array of :class:`matplotlib.Axes`
@@ -358,27 +411,20 @@ class MosaicPermutationTest(abc.ABC):
 		"""
 		# Create plot and x-values
 		import matplotlib.pyplot as plt
-		subplots_kwargs['figsize'] = subplots_kwargs.get("figsize", (12, 6)) # default
-		fig, axes = plt.subplots(1, 2, **subplots_kwargs)
+		figure_kwargs['figsize'] = figure_kwargs.get("figsize", (9, 7)) # default
+
+		# Create subplots
+		fig = plt.figure(**figure_kwargs)
+		ax0 = plt.subplot(2, 1, 1)
+		ax1 = plt.subplot(2, 2, 3)
+		ax2 = plt.subplot(2, 2, 4)
+		axes = [ax0, ax1, ax2]
 		if time_index is None:
 			xvals = self.ends-1
 		else:
 			xvals = time_index[self.ends-1]
 
-		# Subplot 1: p-value
-		zvals = np.maximum(stats.norm.ppf(1-self.pval_tseries), 0)
-		axes[0].plot(xvals, zvals, color='blue', label='Observed')
-		axes[0].scatter(xvals, zvals, color='blue')
-		axes[0].axhline(
-			stats.norm.ppf(1-alpha),
-			color='black',
-			linestyle='dotted',
-			label=rf'Threshold ($\alpha$={alpha})'
-		)
-		axes[0].set(xlabel='Time', ylabel=r'Z-statistic: $\Phi(1-p)_+$')
-		axes[0].legend()
-		axes[0].set_ylim(0)
-		# Subplot 2: statistic value and quantile
+		# Subplot 0: statistic value and quantile
 		if self.stats_tseries.shape[1] == 1:
 			ystat = self.stats_tseries[:, 0]
 			ynulls = self.null_tseries[:, :, 0]
@@ -392,18 +438,50 @@ class MosaicPermutationTest(abc.ABC):
 		rank = int(nrand + 1 - np.floor(alpha * (nrand + 1)))
 		yquant = yquant[:, rank-1] # the -1 accounts for zero indexing
 		# Plot
-		axes[1].plot(xvals, ystat, color='cornflowerblue', label='Mosaic test statistic')
-		axes[1].scatter(xvals, ystat, color='cornflowerblue')
-		axes[1].plot(
+		axes[0].plot(xvals, ystat, color='cornflowerblue', label='Mosaic test statistic')
+		axes[0].plot(
 			xvals, 
 			yquant, 
 			color='orangered',
 			label=rf'Null quantile, $\alpha$={alpha}',
 			linestyle='dotted',
 		)
-		axes[1].scatter(xvals, yquant, color='orangered')
-		axes[1].set(xlabel='Time', ylabel='Statistic value')
+		axes[0].scatter(xvals, ystat, color='cornflowerblue')
+		axes[0].scatter(xvals, yquant, color='orangered')
+		axes[0].set(xlabel='Time', ylabel='Statistic value')
+		axes[0].set(title="Statistic value and threshold")
+		axes[0].legend()
+		# Subplot 1: p-value
+		zvals = stats.norm.ppf(1-self.pval_tseries)
+		axes[1].plot(xvals, zvals, color='blue', label='Observed')
+		axes[1].scatter(xvals, zvals, color='blue')
+		axes[1].axhline(
+			stats.norm.ppf(1-alpha),
+			color='black',
+			linestyle='dotted',
+			label=rf'Threshold ($\alpha$={alpha})'
+		)
+		axes[1].set(xlabel='Time', ylabel=r'Z-statistic: $\Phi(1-p)$')
+		axes[1].set(title="Exact z-statistic")
 		axes[1].legend()
+		axes[1].set_ylim(min(0, zvals.min()-zvals.std()/20))
+		# Subplot 2: approximate z-statistic
+		zapprx = (ystat - ynulls.mean(axis=1)) / (ynulls.std(axis=1))
+		axes[2].plot(xvals, zapprx, color='blue', label='Observed')
+		axes[2].scatter(xvals, zapprx, color='blue')
+		axes[2].axhline(
+			stats.norm.ppf(1-alpha),
+			color='black',
+			linestyle='dotted',
+			label=rf'Threshold ($\alpha$={alpha})'
+		)
+		axes[2].set(xlabel='Time', ylabel=r'(S - E[S]) / sd(S)')
+		axes[2].set(title="Approximate z-statistic")
+		axes[2].set_ylim(min(0, zapprx.min()-zapprx.std()/20))
+		axes[2].legend()
+		# Adjust
+		plt.subplots_adjust(hspace=0.2)
+		#return
 		if show_plot:
 			plt.show()
 		else:
