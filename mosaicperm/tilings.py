@@ -105,10 +105,11 @@ def even_random_partition(n, k, shuffle=True):
 		If True, shuffles before partitioning 
 		to produce a uniformly random partition.
 	"""
-	inds = np.arange(n)
+	if k > n:
+		raise ValueError(f"k={k} > n={n}")
+	groups = np.sort(np.arange(n) % k)
 	if shuffle:
-		np.random.shuffle(inds)
-	groups = inds // (np.ceil(n / k))
+		np.random.shuffle(groups)
 	return [
 		np.where(groups == ell)[0] for ell in range(k)
 	]
@@ -357,6 +358,63 @@ def _exposures_to_batches(exposures, max_batchsize=10):
 			i += 1
 
 	return [batch.astype(int) for batch in batches]
+
+def default_panel_tiles(
+	n_obs: int,
+	n_subjects: int,
+	n_cov: int,
+	clusters=None,
+	ngroups=None,
+	ntiles=None,
+):
+	"""
+	Creates the default tiling for panel data.
+
+	Parameters
+	----------
+	n_obs : int
+		Number of observations per subject / timepoints.
+	n_subjects : int
+		Number of subjects in the panel data.
+	n_cov : int
+		Number of covariates
+	clusters : np.array
+		An ``n_subjects``-length array of cluster_ids, so 
+		``clusters[i] = k`` implies subject i is in the kth cluster.
+		If clusters is provided, the output will preserve the cluster
+		structure.
+	ngroups : int
+		Number of groups to split the subjects into.
+	ntiles : int
+		Total number of tiles to use.
+
+	Returns
+	-------
+	tiles : mosaicperm.tilings.Tiling
+		The default tiling as a :class:`.Tiling` object.	
+	"""
+	# Goal: total number of tiles
+	if ntiles is None:
+		ntiles = min(int(n_obs * n_subjects / (4*n_cov)), 10)
+
+	# Create groups
+	if ngroups is None:
+		ngroups = min(ntiles, n_subjects)
+	if clusters is None:
+		groups = even_random_partition(n=n_subjects, k=ngroups)
+	else:
+		coarsened = coarsify_partition(
+			clusters, k=ngroups, minsize=int(np.ceil(n_obs / (3*n_cov)))
+		)
+		groups = [np.where(coarsened == k)[0] for k in np.unique(coarsened)]
+	# Create batches
+	nbatches = min(int(np.floor(n_obs / 2)), int(np.ceil(ntiles / len(groups))))
+	batches = even_random_partition(
+		n=n_obs, k=nbatches, shuffle=False
+	)
+	tiles = list(itertools.product(batches, groups))
+	return Tiling(tiles)
+
 
 
 if __name__ == "__main__":

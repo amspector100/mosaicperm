@@ -13,11 +13,12 @@ def ols_residuals(
 	Parameters
 	----------
 	outcomes : np.array
-		(n_obs, n_subjects) array of outcome data.
+		(``n_obs``, ``n_subjects``) array of outcomes, e.g., asset returns.
+		``outcomes`` may contain nans to indicate missing values.
 	exposures : np.array
-		(n_obs, n_subjects, n_factors) array of factor exposures
+		(``n_obs``, ``n_subjects``, ``n_factors``) array of factor exposures
 		OR 
-		(n_subjects, n_factors) array of factor exposures if
+		(``n_subjects``, ``n_factors``) array of factor exposures if
 		the exposures do not change with time.
 	
 	Returns
@@ -120,31 +121,15 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 		exposures: np.array,
 		test_stat: callable,
 		test_stat_kwargs: Optional[dict]=None,
-		tiles: Optional[list]=None, 
+		tiles: Optional[tilings.Tiling]=None, 
 		clusters: Optional[np.array]=None,
 		**kwargs,
 	):
-		# Data
-		if isinstance(outcomes, pd.DataFrame):
-			outcomes = outcomes.values
-		if isinstance(exposures, pd.DataFrame):
-			exposures = exposures.values
-		self.outcomes = outcomes.copy()
-		self.exposures = exposures.copy()
-		# Remove nans
+		# Process data
+		self.outcomes, self.exposures = core._preprocess_data(
+			outcomes=outcomes, covariates=exposures
+		)
 		self.n_obs, self.n_subjects = outcomes.shape
-		if np.any(np.isnan(self.outcomes)):
-			# in this case, must make exposures 3-dimensional since the nan
-			# pattern will causes the exposures to change with time
-			if len(self.exposures.shape) == 2:
-				self.exposures = np.stack(
-					[self.exposures for _ in range(self.n_obs)], axis=0
-				)
-			# fill with zeros (provably preserving validity)
-			self.exposures[np.isnan(self.outcomes)] = 0
-			self.outcomes[np.isnan(self.outcomes)] = 0
-		# fill additional missing exposures with zero
-		self.exposures[np.isnan(self.exposures)] = 0
 		# Test statistic
 		self.test_stat = test_stat
 		self.tstat_kwargs = test_stat_kwargs

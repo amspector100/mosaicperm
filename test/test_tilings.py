@@ -217,3 +217,39 @@ class TestClusteredTilings(unittest.TestCase):
 				len(group) >= 2*n_factors,
 				f"group={group} has <= 2*n_factors elements"
 			)
+
+class TestPanelTilings(unittest.TestCase):
+
+	def test_default_panel_valid(self):
+		np.random.seed(123)
+		n_obs, n_subjects, n_cov = 50, 30, 20
+		clusters_example = np.random.randint(0, 10, size=n_subjects)
+		for ngroups in [None, 10]:
+			for ntiles in [None, 50]:
+				for clusters in [None, clusters_example]:
+					tiles = mp.tilings.default_panel_tiles(
+						n_obs=n_obs,
+						n_subjects=n_subjects,
+						n_cov=n_cov,
+						ntiles=ntiles,
+						ngroups=ngroups,
+						clusters=clusters,
+					)
+					mp.tilings.check_valid_tiling(tiles)
+					for batch, _ in tiles:
+						np.testing.assert_array_almost_equal(
+							batch,
+							np.arange(np.min(batch), np.max(batch)+1),
+							decimal=5,
+							err_msg=f"batch={batch} is not contiguous for panel data"
+						)
+					if clusters is not None:
+						for (batch, group) in tiles:
+							# Test that each group is a union of clusters
+							group_clust = np.unique(clusters[group])
+							neg_group = np.array([i for i in range(n_subjects) if i not in group])
+							self.assertTrue(
+								np.sum([np.sum(clusters[neg_group] == k) for k in group_clust]) == 0,
+								f"group={group} is not a union of clusters={clusters}"
+							)
+

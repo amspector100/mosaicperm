@@ -1,3 +1,3 @@
-from . import factor, tilings, statistics
+from . import factor, panel, statistics, tilings
 
 __version__ = '0.1.0'

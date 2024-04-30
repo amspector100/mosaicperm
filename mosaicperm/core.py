@@ -47,6 +47,46 @@ def compute_adaptive_pval(
 	pval = np.sum(adapt_stats[0] <= adapt_stats) / (nrand + 1)
 	return pval, adapt_stats[0], adapt_stats[1:]
 
+def _preprocess_data(outcomes: np.array, covariates: np.array) -> tuple:
+	"""
+	Parameters
+	----------
+	outcomes : np.array
+		n_obs x n_subjects array of outcome data
+	covariates : np.array
+		Either n_obs x n_subjects x n_cov array of covariates/exposures
+		or a 2D n_subjects x n_cov array if the values do not change with time.
+
+	Returns
+	-------
+	outcomes : np.array
+		processed outcome data
+	covariates : np.array
+		processed covariate data
+	"""
+	### 1. Convert from pandas to numpy
+	if isinstance(outcomes, pd.DataFrame):
+		outcomes = outcomes.values
+	if isinstance(covariates, pd.DataFrame):
+		covariates = covariates.values
+	### 2. Remove nans
+	outcomes = outcomes.copy()
+	covariates = covariates.copy()
+	n_obs = len(outcomes)
+	if np.any(np.isnan(outcomes)):
+		# in this case, must make exposures 3-dimensional since the nan
+		# pattern will causes the exposures to change with time
+		if len(covariates.shape) == 2:
+			covariates = np.stack(
+				[covariates for _ in range(n_obs)], axis=0
+			)
+		# fill with zeros (preserves validity)
+		covariates[np.isnan(outcomes)] = 0
+		outcomes[np.isnan(outcomes)] = 0
+	# Fill missing additional covariates with zero
+	covariates[np.isnan(covariates)] = 0
+	return outcomes, covariates
+
 class MosaicPermutationTest(abc.ABC):
 	"""
 	Generic class meant for subclassing.
