@@ -324,7 +324,7 @@ class MosaicPanelInference:
 		if not utilities.haslength(features):
 			features = np.array([features]).astype(int)
 
-		# Lower cis
+		# To save the confidence intervals
 		columns = ['Estimate', 'Lower', 'Upper', 'p-value']
 		self._summary = pd.DataFrame(
 			np.zeros((len(features), 4)),
@@ -332,6 +332,12 @@ class MosaicPanelInference:
 			columns=columns,
 		)
 		self._summary.values[:] = np.nan
+
+		# Save the slopes and statistics
+		self._null_estimates = np.zeros((self.n_cov, nrand))
+		self._null_estimate_slopes = np.zeros((self.n_cov, nrand))
+
+
 		# Loop through and compute
 		ntiles = len(self.tiles)
 		xinds = np.stack([np.arange(ntiles) for _ in range(nrand)])
@@ -354,6 +360,9 @@ class MosaicPanelInference:
 				null_slopes=null_slopes,
 				alpha=alpha,
 			)
+			# Save
+			self._null_estimates = null_stats / slope
+			self._null_estimate_slopes = null_slopes / slope
 			# Compute p-value
 			pval = (1 + np.sum(np.abs(stat) <= np.abs(null_stats))) / (1 + nrand)
 			# Estimate
@@ -390,9 +399,11 @@ class MosaicPanelInference:
 		-------
 		self : object
 		"""
-		print("Computing mosaic residuals.")
+		if verbose:
+			print("Computing mosaic residuals.")
 		self.compute_mosaic_residuals(verbose=verbose)
-		print("Computing confidence intervals.")
+		if verbose:
+			print("Computing confidence intervals.")
 		self._compute_confidence_intervals(
 			nrand=nrand, alpha=alpha, features=features, verbose=verbose
 		)
