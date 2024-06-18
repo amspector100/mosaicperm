@@ -4,7 +4,7 @@
 .. currentmodule:: mosaicperm.factor
 
 .. autoclass:: MosaicBCV
-   :exclude-members: compute_mosaic_residuals,fit,fit_tseries,permute_residuals,plot_tseries,summary,
+   :exclude-members: compute_mosaic_residuals,fit,fit_tseries,permute_residuals,plot_tseries,summary,summary_plot,
 
    
    
@@ -19,6 +19,7 @@
       ~MosaicBCV.permute_residuals
       ~MosaicBCV.plot_tseries
       ~MosaicBCV.summary
+      ~MosaicBCV.summary_plot
    
    
    
