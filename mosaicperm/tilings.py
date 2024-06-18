@@ -259,6 +259,7 @@ def random_tiles(
 	n_subjects: int,
 	nbatches: int,
 	ngroups: int,
+	seed: int=123,
 ) -> Tiling:
 	"""
 	Partitions outcomes into ``nbatches`` x ``ngroups`` random tiles.
@@ -273,12 +274,15 @@ def random_tiles(
 		Number of batches to split observations into.
 	ngroups : int
 		Number of groups to split subjects into.
+	seed : int
+		Random seed.
 
 	Returns
 	-------
 	tiles : mosaicperm.tilings.Tiling
 		The default tiling as a :class:`.Tiling` object.
 	"""
+	np.random.seed(seed)
 	# partition along timepoints
 	batches = even_random_partition(n=n_obs, k=nbatches, shuffle=False)
 	# partition along subjects
@@ -295,6 +299,7 @@ def default_factor_tiles(
 	max_batchsize: Optional[int]=10,
 	ngroups: Optional[int]=None,
 	clusters: Optional[np.array]=None,
+	seed: int=123,
 ) -> Tiling:
 	"""
 	Computes default tiling for factor models.
@@ -325,6 +330,7 @@ def default_factor_tiles(
 	tiles : mosaicperm.tilings.Tiling
 		The default tiling as a :class:`.Tiling` object.
 	"""
+	np.random.seed(seed)
 	# Choose batches
 	if len(exposures.shape) == 3:
 		n_obs, n_subjects, n_factors = exposures.shape

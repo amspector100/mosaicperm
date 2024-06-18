@@ -276,6 +276,7 @@ class TestMosaicFactorTest(context.MosaicTest):
 		exposures = np.random.randn(n_obs, n_subjects, n_factors)
 		outcomes = np.random.randn(n_obs, n_subjects)
 		outcomes[outcomes < -1.25] = np.nan
+		missing_pattern = np.isnan(outcomes)
 		# create residuals
 		mpt = mp.factor.MosaicFactorTest(
 			outcomes=outcomes, exposures=exposures, test_stat=None
@@ -298,6 +299,20 @@ class TestMosaicFactorTest(context.MosaicTest):
 				decimal=5,
 				err_msg=f"Mosaic with 3D exposures and missing outcomes does not enforce orthogonality"
 			)
+
+		# Check that local exchangeability is preserved
+		for (batch, group) in mpt.tiles:
+			for j in group:
+				zero_prop = np.mean(mpt.outcomes[batch, j] == 0)
+				self.assertTrue(
+					zero_prop in [0.0,1.0],
+					f"For asset={j}, batch={batch}, outcomes={mpt.outcomes[batch, j]} has a mix of zeros and non zeros"
+				)
+				expected = float(np.any(missing_pattern[batch, j] == 1))
+				self.assertTrue(
+					zero_prop == expected,
+					f"For asset={j}, batch={batch}, zero_prop={zero_prop} should equal {expected} based on missing pattern."
+				)
 
 	def test_nans_constant_within_tiles(self):
 		# Repeat with the missing pattern by patch
@@ -354,6 +369,34 @@ class TestMosaicFactorTest(context.MosaicTest):
 				np.any(np.isnan(mpt.statistic)),
 				f"mpt.statistics contains nans"
 			)
+			# Fit time series variant and make sure no errors
+			mpt.fit_tseries(nrand=1, n_timepoints=3)
+			mpt.plot_tseries(show_plot=False)
+
+	def test_handling_zero_factors(self):
+
+		# Data
+		n_obs, n_subjects, n_factors = 25, 20, 3
+		exposures = np.random.randn(n_obs, n_subjects, n_factors)
+		outcomes = np.random.randn(n_obs, n_subjects)
+		# new exposures
+		new_exposures = np.concatenate(
+			[exposures, np.zeros((n_obs, n_subjects, 5*n_factors))], axis=-1
+		)
+		# Test that the results are the same
+		test_stat = mp.statistics.mean_maxcorr_stat
+		mpt = mp.factor.MosaicFactorTest(
+			outcomes=outcomes, exposures=exposures, test_stat=test_stat
+		).fit(nrand=1)
+		mpt_new = mp.factor.MosaicFactorTest(
+			outcomes=outcomes, exposures=new_exposures, test_stat=test_stat
+		).fit(nrand=1)
+		np.testing.assert_array_almost_equal(
+			mpt.residuals,
+			mpt_new.residuals,
+			decimal=5,
+			err_msg=f"Adding all zero factors changes residuals"
+		)
 
 
 class TestMosaicBCV(context.MosaicTest):
@@ -389,6 +432,9 @@ class TestMosaicBCV(context.MosaicTest):
 			decimal=5,
 			err_msg=f"MosaicBCV produces unexpected test statistic values"
 		)
+		# test for errors in tseries variant
+		mpt_bcv.fit_tseries(nrand=1, n_timepoints=3)
+		mpt_bcv.plot_tseries(show_plot=False)
 
 if __name__ == "__main__":
 	# Run tests---useful if using cprofilev

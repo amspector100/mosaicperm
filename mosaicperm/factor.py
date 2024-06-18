@@ -133,7 +133,8 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 		self.exposures = exposures.copy()
 		# Remove nans
 		self.n_obs, self.n_subjects = outcomes.shape
-		if np.any(np.isnan(self.outcomes)):
+		missing_pattern = np.isnan(self.outcomes)
+		if np.any(missing_pattern):
 			# in this case, must make exposures 3-dimensional since the nan
 			# pattern will causes the exposures to change with time
 			if len(self.exposures.shape) == 2:
@@ -141,10 +142,16 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 					[self.exposures for _ in range(self.n_obs)], axis=0
 				)
 			# fill with zeros (provably preserving validity)
-			self.exposures[np.isnan(self.outcomes)] = 0
-			self.outcomes[np.isnan(self.outcomes)] = 0
+			self.exposures[missing_pattern] = 0
+			self.outcomes[missing_pattern] = 0
 		# fill additional missing exposures with zero
 		self.exposures[np.isnan(self.exposures)] = 0
+		# Remove factors with all zero exposures
+		if len(self.exposures.shape) == 3:
+			to_keep = np.any(self.exposures != 0, axis=(0,1))
+		else:
+			to_keep = np.any(self.exposures != 0, axis=0)
+		self.exposures = self.exposures[..., to_keep]
 		# Test statistic
 		self.test_stat = test_stat
 		self.tstat_kwargs = test_stat_kwargs
@@ -160,6 +167,12 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 				clusters=self.clusters,
 				**kwargs
 			)
+		# Readjust outcomes to ensure that missing pattern
+		# does not yield to local exchangeability violations
+		for (batch, group) in self.tiles:
+			missing_subjects = np.any(missing_pattern[np.ix_(batch, group)], axis=0)
+			self.outcomes[np.ix_(batch, group[missing_subjects])] = 0
+
 		# initialize
 		super().__init__()
 
