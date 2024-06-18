@@ -1,7 +1,6 @@
 import numpy as np
 import itertools
 from typing import Optional, Union
-from abc import ABC
 
 def check_valid_tiling(tiles: list) -> None:
 	"""
@@ -17,20 +16,18 @@ def check_valid_tiling(tiles: list) -> None:
 	------
 		ValueError: if ``tiles`` is an invalid tiling.
 	"""
-	## Check disjointness
-	all_support = set()
-	for m, tile in enumerate(tiles):
-		support = set(list(itertools.product(tile[0], tile[1])))
-		if len(all_support.intersection(support)) > 0:
+	## Check disjointness and support
+	n_obs = int(np.max([np.max(tile[0]) for tile in tiles]) + 1)
+	n_subjects = int(np.max([np.max(tile[1]) for tile in tiles]) + 1)
+	counts = np.zeros((n_obs, n_subjects))
+	for m, (batch, group) in enumerate(tiles):
+		if np.any(counts[np.ix_(batch, group)] != 0):
 			raise ValueError(f"Tile {m} is not disjoint from tiles 0-{m-1}.")
-		all_support = all_support.union(support)
-	
+		counts[np.ix_(batch, group)] += 1
+
 	## Check support
-	n_obs = np.max([np.max(tile[0]) for tile in tiles]) + 1
-	n_subjects = np.max([np.max(tile[1]) for tile in tiles]) + 1
-	if set(itertools.product(np.arange(n_obs), np.arange(n_subjects))) != all_support:
+	if not np.all(counts == 1):
 		raise ValueError(f"Tiles are disjoint but do not partition [n_obs] x [n_subjects]")
-	return tiles
 
 class Tiling(list):
 	"""
@@ -58,18 +55,18 @@ class Tiling(list):
 	>>> 
 	>>> # a valid tiling of {0, 1} x {0, 1, 2, 3}
 	>>> tiles0 = [
-	...		(np.array([0]), np.array([0, 2])),
+	... 	(np.array([0]), np.array([0, 2])),
 	... 	(np.array([0]), np.array([1, 3])),
-	...		(np.array([1]), np.array([0, 1])),
+	... 	(np.array([1]), np.array([0, 1])),
 	... 	(np.array([1]), np.array([2, 3])),
 	... ]
 	>>> tiling = mp.tilings.Tiling(tiles0, check_valid=True)
 
 	>>> # an invalid tiling due to repeats
 	>>> tiles1 = [
-	...		(np.array([0, 2]), np.array([0, 1])),
+	... 	(np.array([0, 2]), np.array([0, 1])),
 	... 	(np.array([1]), np.array([0, 1])),
-	...		(np.array([0]), np.array([1])),
+	... 	(np.array([0]), np.array([1])),
 	... ]
 	>>> tiling = mp.tilings.Tiling(tiles1, check_valid=True)
 	Traceback (most recent call last):
@@ -130,7 +127,7 @@ class Tiling(list):
 		Notes
 		-----
 		The .npy file must have been generated using 
-		:method:`save` or this method will not work.
+		:meth:`save` or this method will not work.
 		"""
 		raw = np.load(filename)
 		# 1. The length of the array of breaks
@@ -312,7 +309,7 @@ def default_factor_tiles(
 		(``n_subjects``, ``n_factors``) array of factor exposures if
 		the exposures do not change with time.	
 	n_obs : int
-		Number of timepoints. Optional unless exposures is 2D
+		Number of timepoints. Optional unless exposures is 2D.
 	max_batchsize : int
 		Maximum length (in time) of a tile.
 	ngroups : int
@@ -324,6 +321,8 @@ def default_factor_tiles(
 		``clusters[i] = k`` implies subject i is in the kth cluster.
 		If clusters is provided, the output will preserve the cluster
 		structure.
+	seed: int
+		Random seed.
 
 	Returns
 	-------
