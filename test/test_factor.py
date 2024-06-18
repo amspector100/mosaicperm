@@ -374,6 +374,28 @@ class TestMosaicFactorTest(context.MosaicTest):
 			mpt.fit_tseries(nrand=2, n_timepoints=3)
 			mpt.plot_tseries(show_plot=False)
 
+	@patch("matplotlib.pyplot.show")
+	def test_plots_do_not_error(self, mock_show):
+		# Small-scale data
+		n_obs, n_subjects, n_factors = 100, 50, 2
+		exposures = np.random.randn(n_obs, n_subjects, n_factors)
+		outcomes = np.random.randn(n_obs, n_subjects)
+		# Fit for two test statistics
+		stats = [mp.statistics.mean_maxcorr_stat, mp.statistics.quantile_maxcorr_stat]
+		for stat in stats:
+			
+			mptest = mp.factor.MosaicFactorTest(
+				outcomes=outcomes, 
+				exposures=exposures,
+				test_stat=stat,
+			)
+			mptest.fit()
+			mptest.summary_plot()
+			mptest.summary_plot(figsize=(10,10))
+			mptest.fit_tseries()
+			mptest.plot_tseries()
+			fig, axes = mptest.plot_tseries(figsize=(10,10), show_plot=False)
+
 	def test_handling_zero_factors(self):
 
 		# Data
