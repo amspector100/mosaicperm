@@ -46,6 +46,92 @@ def compute_adaptive_pval(
 	pval = np.sum(adapt_stats[0] <= adapt_stats) / (nrand + 1)
 	return pval, adapt_stats[0], adapt_stats[1:]
 
+
+def _create_tseries_plot(
+	xvals: np.array, # x-axix
+	ystat: np.array, # statistic values
+	pvals: np.array, # p-values
+	zapprx: np.array, # approximate Z-statistics
+	ynull_mean: Optional[np.array]=None, # null means
+	yquant: Optional[np.array]=None, # null quantiles
+	alpha: float=0.05, # threshold
+	show_plot: bool=True,
+	**figure_kwargs
+):
+	"""
+	Private function which is used to create tseries plots.
+	"""
+	import matplotlib.pyplot as plt
+	figure_kwargs['figsize'] = figure_kwargs.get("figsize", (9, 7)) # default
+	
+	# Create subplots
+	fig = plt.figure(**figure_kwargs)
+	ax0 = plt.subplot(2, 1, 1)
+	ax1 = plt.subplot(2, 2, 3)
+	ax2 = plt.subplot(2, 2, 4)
+	axes = [ax0, ax1, ax2]
+	
+	## First plot: statistic value
+	# Plot statistic value
+	axes[0].plot(xvals, ystat, color='cornflowerblue', label='Mosaic test statistic')
+	axes[0].scatter(xvals, ystat, color='cornflowerblue')
+	# Possibly add null mean
+	if ynull_mean is not None:
+		axes[0].plot(xvals, ynull_mean, color='orangered', label='Null mean')
+		axes[0].scatter(xvals, ynull_mean, color='orangered')
+	# Possibly add quantile
+	if yquant is not None:
+		axes[0].plot(
+			xvals, 
+			yquant, 
+			color='orangered',
+			label=rf'Null quantile, $\alpha$={alpha}',
+			linestyle='dotted',
+		)
+		axes[0].scatter(xvals, yquant, color='orangered')
+		axes[0].set(title="Statistic value and threshold")
+	else:
+		axes[0].set(title='Statistic value')
+	axes[0].set(xlabel='Time', ylabel='Statistic value')
+	axes[0].legend()
+	
+	## Subplot 1: p-value
+	zvals = stats.norm.ppf(1-pvals)
+	zvals[zvals == - np.inf] = zvals[zvals > - np.inf].min()
+	axes[1].plot(xvals, zvals, color='blue', label='Observed')
+	axes[1].scatter(xvals, zvals, color='blue')
+	axes[1].axhline(
+		stats.norm.ppf(1-alpha),
+		color='black',
+		linestyle='dotted',
+		label=rf'Threshold ($\alpha$={alpha})'
+	)
+	axes[1].set(xlabel='Time', ylabel=r'Z-statistic: $\Phi(1-p)$')
+	axes[1].set(title="Exact z-statistic")
+	axes[1].legend()
+	axes[1].set_ylim(min(0, zvals.min()-zvals.std()/20))    
+	
+	## Subplot 2: approximate z-statistic
+	axes[2].plot(xvals, zapprx, color='blue', label='Observed')
+	axes[2].scatter(xvals, zapprx, color='blue')
+	axes[2].axhline(
+		stats.norm.ppf(1-alpha),
+		color='black',
+		linestyle='dotted',
+		label=rf'Threshold ($\alpha$={alpha})'
+	)
+	axes[2].set(xlabel='Time', ylabel=r'(S - E[S]) / sd(S)')
+	axes[2].set(title="Approximate z-statistic")
+	axes[2].set_ylim(min(0, zapprx.min()-zapprx.std()/20))
+	axes[2].legend()
+	# Adjust
+	plt.subplots_adjust(hspace=0.2)
+	#return
+	if show_plot:
+		plt.show()
+	else:
+		return fig, axes
+
 class MosaicPermutationTest(abc.ABC):
 	"""
 	Generic class meant for subclassing.
@@ -297,6 +383,20 @@ class MosaicPermutationTest(abc.ABC):
 			plt.show()
 		return fig, ax
 
+	def _compute_apprx_zstat_tseries(self):
+		"""
+		Minor helper function used within _compute_p_value_tseries.
+		"""
+		### Compute z-statistics
+		if self.stats_tseries.shape[1] == 1:
+			ystat = self.stats_tseries[:, 0]
+			ynulls = self.null_tseries[:, :, 0]
+		else:
+			ystat = self.adapt_stats_tseries
+			ynulls = self.null_adapt_tseries
+		self.apprx_zstat_tseries = (ystat - ynulls.mean(axis=1)) / (ynulls.std(axis=1))
+
+
 	def _compute_p_value_tseries(
 		self, nrand: int, verbose: bool, n_timepoints: int, window: Optional[int], 
 	) -> None:
@@ -361,13 +461,7 @@ class MosaicPermutationTest(abc.ABC):
 			self.null_adapt_tseries[i] = out[2]
 
 		### Compute z-statistics
-		if self.stats_tseries.shape[1] == 1:
-			ystat = self.stats_tseries[:, 0]
-			ynulls = self.null_tseries[:, :, 0]
-		else:
-			ystat = self.adapt_stats_tseries
-			ynulls = self.null_adapt_tseries
-		self.apprx_zstat_tseries = (ystat - ynulls.mean(axis=1)) / (ynulls.std(axis=1))
+		self._compute_apprx_zstat_tseries()
 
 	def fit_tseries(
 		self, 
@@ -432,22 +526,13 @@ class MosaicPermutationTest(abc.ABC):
 		ax: array of :class:`matplotlib.Axes`
 			Axes from the ``plt.subplots()`` call.
 		"""
-		# Create plot and x-values
-		import matplotlib.pyplot as plt
-		figure_kwargs['figsize'] = figure_kwargs.get("figsize", (9, 7)) # default
-
-		# Create subplots
-		fig = plt.figure(**figure_kwargs)
-		ax0 = plt.subplot(2, 1, 1)
-		ax1 = plt.subplot(2, 2, 3)
-		ax2 = plt.subplot(2, 2, 4)
-		axes = [ax0, ax1, ax2]
+		# Create x-values
 		if time_index is None:
 			xvals = self.ends-1
 		else:
 			xvals = time_index[self.ends-1]
 
-		# Subplot 0: statistic value and quantile
+		# statistic value, null mean, and quantile
 		if self.stats_tseries.shape[1] == 1:
 			ystat = self.stats_tseries[:, 0]
 			ynulls = self.null_tseries[:, :, 0]
@@ -456,56 +541,184 @@ class MosaicPermutationTest(abc.ABC):
 			ynulls = self.null_adapt_tseries
 		# Compute quantile 
 		nrand = ynulls.shape[1]
+		ynull_mean = ynulls.mean(axis=1)
 		yquant = np.concatenate([ystat.reshape(-1, 1), ynulls], axis=1) # shape: nvals x (nrand + 1)
 		yquant = np.sort(yquant, axis=1)
 		rank = int(nrand + 1 - np.floor(alpha * (nrand + 1)))
 		yquant = yquant[:, rank-1] # the -1 accounts for zero indexing
-		# Plot
-		axes[0].plot(xvals, ystat, color='cornflowerblue', label='Mosaic test statistic')
-		axes[0].plot(
-			xvals, 
-			yquant, 
-			color='orangered',
-			label=rf'Null quantile, $\alpha$={alpha}',
-			linestyle='dotted',
+		return _create_tseries_plot(
+			xvals=xvals,
+			ystat=ystat,
+			pvals=self.pval_tseries,
+			zapprx=self.apprx_zstat_tseries,
+			ynull_mean=ynull_mean,
+			yquant=yquant,
+			alpha=alpha,
+			show_plot=show_plot,
+			**figure_kwargs
 		)
-		axes[0].scatter(xvals, ystat, color='cornflowerblue')
-		axes[0].scatter(xvals, yquant, color='orangered')
-		axes[0].set(xlabel='Time', ylabel='Statistic value')
-		axes[0].set(title="Statistic value and threshold")
-		axes[0].legend()
-		# Subplot 1: p-value
-		zvals = stats.norm.ppf(1-self.pval_tseries)
-		axes[1].plot(xvals, zvals, color='blue', label='Observed')
-		axes[1].scatter(xvals, zvals, color='blue')
-		axes[1].axhline(
-			stats.norm.ppf(1-alpha),
-			color='black',
-			linestyle='dotted',
-			label=rf'Threshold ($\alpha$={alpha})'
+
+### Methods of aggregation
+def _combine_pvals(pvals: np.array, how_combine: str='mean'):
+	how_combine = str(how_combine).lower()
+	if how_combine in ['mean', 'average']:
+		return np.minimum(1, 2 * np.mean(pvals, axis=0))
+	elif how_combine == 'median':
+		return np.minimum(1, 2 * np.median(pvals, axis=0))
+	elif how_combine == 'min':
+		return np.minimum(1, len(pvals) * np.min(pvals, axis=0))
+	else:
+		raise ValueError(f"Unrecognized how_combine={how_combine}.")
+
+def combine_mosaic_tests(
+	mosaic_objects: list[MosaicPermutationTest],
+	how_combine_pvals='median',
+):
+	"""
+	Combines results across :class:`MosaicPermutationTest` objects.
+
+	Parameters
+	----------
+	mosaic_objects : list
+		List of objects inheriting from :class:`MosaicPermutationTest`,
+		after calling ``.fit()`` for each object.
+	how_combine_pvals : str
+		How to combine the p-values. One of several options:
+
+		- 'median' : twice the median
+		- 'mean' : twice the mean
+		- 'min' : len(mosaic_objects) times the minimum (Bonferroni correction).
+
+	Returns
+	-------
+	summary : pd.Series
+		Series of key inferential results.
+
+	Notes
+	-----
+	This function combines results when using the same set 
+	of test statistics and different tilings. To combine results
+	using the same tiling and different test statistics,
+	just use a vector-valued test statistic.
+	"""
+	mpts = mosaic_objects
+	try:
+		pval = _combine_pvals(
+			pvals=np.array([mpt.pval for mpt in mpts]),
+			how_combine=how_combine_pvals,
 		)
-		axes[1].set(xlabel='Time', ylabel=r'Z-statistic: $\Phi(1-p)$')
-		axes[1].set(title="Exact z-statistic")
-		axes[1].legend()
-		axes[1].set_ylim(min(0, zvals.min()-zvals.std()/20))
-		# Subplot 2: approximate z-statistic
-		zapprx = self.apprx_zstat_tseries
-		axes[2].plot(xvals, zapprx, color='blue', label='Observed')
-		axes[2].scatter(xvals, zapprx, color='blue')
-		axes[2].axhline(
-			stats.norm.ppf(1-alpha),
-			color='black',
-			linestyle='dotted',
-			label=rf'Threshold ($\alpha$={alpha})'
-		)
-		axes[2].set(xlabel='Time', ylabel=r'(S - E[S]) / sd(S)')
-		axes[2].set(title="Approximate z-statistic")
-		axes[2].set_ylim(min(0, zapprx.min()-zapprx.std()/20))
-		axes[2].legend()
-		# Adjust
-		plt.subplots_adjust(hspace=0.2)
-		#return
-		if show_plot:
-			plt.show()
+		apprx_zstat = np.mean([mpt.apprx_zstat for mpt in mpts])
+		# decide whether or not to use the adaptive variant
+		d = mpts[0].null_statistics.shape[1]
+		if d == 1:
+			stat = np.mean([mpt.statistic for mpt in mpts])
+			null_stat = np.mean([np.mean(mpt.null_statistics) for mpt in mpts])
 		else:
-			return fig, axes
+			stat = np.mean([mpt.adapt_stat for mpt in mpts])
+			null_stat = np.mean([np.mean(mpt.null_adapt_stats) for mpt in mpts])
+		# Return summary
+		return pd.Series(
+			np.array([stat, null_stat, apprx_zstat, pval]),
+			index=['statistic', 'null_statistic_mean', 'apprx_zstat', 'p-value'],
+		)
+	except AttributeError as e:
+		raise AttributeError("combine_mosaic_tests raised AttributeError---try calling .fit()?")
+
+def combine_mosaic_tests_tseries(
+	mosaic_objects,
+	how_combine_pvals='median',
+	plot: bool=True,
+	alpha: float=0.05,
+	**figure_kwargs,
+):
+	"""
+	Combines time-series results across :class:`MosaicPermutationTest` objects.
+
+	Parameters
+	----------
+	mosaic_objects : list
+		List of objects inheriting from :class:`MosaicPermutationTest`,
+		after calling ``.fit_tseries()`` for each object.
+	how_combine_pvals : str
+		How to combine the p-values. One of several options:
+
+		- 'median' : twice the median
+		- 'mean' : twice the mean
+		- 'min' : len(mosaic_objects) times the minimum (Bonferroni correction).
+	plot : bool
+		If True, displays a plot of results similar to the 
+		``MosaicPermutationTest.plot_tseries()`` method.
+	alpha : float
+		Nominal level for error control.
+	**figure_kwargs : dict
+		kwargs for ``plt.figure()``, e.g., ``figsize``.
+
+	Returns
+	-------
+	df : pd.DataFrame
+		DataFrame of key inferential results.
+
+	Notes
+	-----
+	This function combines results when using the same set 
+	of test statistics and different tilings. To combine results
+	using the same tiling and different test statistics,
+	just use a vector-valued test statistic.
+	"""
+	mpts = mosaic_objects
+	try:
+		# Combine p-values and approximate z-statistics
+		pvals = _combine_pvals(
+			pvals=np.stack([mpt.pval_tseries for mpt in mpts], axis=0),
+			how_combine=how_combine_pvals,
+		)
+		apprx_zstats = np.stack(
+			[mpt.apprx_zstat_tseries for mpt in mpts], axis=0
+		).mean(axis=0)
+		# Combine statistics and null statistics
+		if mpts[0].stats_tseries.shape[1] == 1:
+			stat_tseries = np.stack(
+				[mpt.stats_tseries.flatten() for mpt in mpts], axis=0
+			).mean(axis=0)
+			null_means = np.stack(
+				[mpt.null_tseries[:, :, 0] for mpt in mpts], axis=0
+			).mean(axis=0).mean(axis=1)
+		else:
+			stat_tseries = np.stack(
+				[mpt.adapt_stats_tseries for mpt in mpts], axis=0
+			).mean(axis=0)
+			null_means = np.stack(
+				[mpt.null_adapt_tseries for mpt in mpts], axis=0
+			).mean(axis=0).mean(axis=1)
+		# Dataframe to return
+		df = pd.DataFrame(
+			np.stack(
+				[
+					mpts[0].ends, stat_tseries, null_means, apprx_zstats, pvals
+				],
+				axis=1
+			),
+			columns=['Window end', 'statistic', 'null_statistic_mean', 'apprx_zstat', 'p-value'],
+		)
+		# Possibly plot
+		if plot:
+			show_plot = figure_kwargs.pop("show_plot", True)
+			_create_tseries_plot(
+				xvals=mpts[0].ends,
+				ystat=stat_tseries,
+				pvals=pvals,
+				zapprx=apprx_zstats,
+				ynull_mean=null_means,
+				alpha=alpha,
+				show_plot=show_plot,
+				**figure_kwargs,
+			)
+		# Return
+		return df
+			
+		
+	except AttributeError as e:
+		raise AttributeError(
+			"combine_mosaic_tests_tseries raised AttributeError---try calling .fit_tseries()?"
+		)
+		

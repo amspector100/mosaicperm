@@ -13,6 +13,14 @@ Factor models (``mosaicperm.factor``)
    :template: 
    ~mosaicperm.factor.ols_residuals
 
+Combining results (``mosaicperm.core``)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. autosummary::
+   :toctree: generated/
+
+   ~mosaicperm.core.combine_mosaic_tests
+   ~mosaicperm.core.combine_mosaic_tests_tseries
+
 Test statistics (``mosaicperm.statistics``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 .. autosummary::

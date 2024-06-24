@@ -337,6 +337,9 @@ class MosaicBCV(MosaicFactorTest):
 			self.adapt_stats_tseries[i] = out[1]
 			self.null_adapt_tseries[i] = out[2]
 
+		# z-statistics
+		self._compute_apprx_zstat_tseries()
+
 		# create self.starts/self.ends to signal indices of output
 		if window is not None:
 			self.starts = np.arange(0, self.n_obs - window + 1)

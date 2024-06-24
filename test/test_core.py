@@ -69,3 +69,51 @@ class TestAdaptivePval(context.MosaicTest):
 				adapt_stats[0], adapt_stats[1:]
 			)[0]
 		self.check_binary_pval_symmetric(pvals, alpha=0.001)
+
+class TestCombinations(context.MosaicTest):
+	"""
+	Tests functions which combine mosaic tests.
+	"""
+
+	def test_combination_functions(self):
+		# Create data
+		np.random.seed(123)
+		n_obs, n_subjects, n_factors = 200, 50, 2
+		exposures = np.random.randn(n_obs, n_subjects, n_factors)
+		outcomes = np.random.randn(n_obs, n_subjects) 
+		outcomes += np.arange(n_obs).reshape(-1, 1) * np.random.randn(n_obs, 1) / n_obs
+		# Fit many mosaic models
+		n_seeds, n_timepoints, nrand, window = 3, 5, 20, 50
+		for test_stat, adaptive in zip(
+			[mp.statistics.mean_maxcorr_stat, mp.statistics.quantile_maxcorr_stat],
+			[False, True]
+		):
+			mpts = []
+			for seed in range(n_seeds):
+				mpt = mp.factor.MosaicFactorTest(
+					outcomes=outcomes, exposures=exposures, test_stat=test_stat,
+					seed=seed,
+				).fit_tseries(nrand=nrand, n_timepoints=n_timepoints, verbose=False, window=window)
+				mpt.fit(nrand=nrand, verbose=False)
+				mpts.append(mpt)
+			# Check that the combination functions work
+			for how in ['mean', 'median', 'min']:
+				# Non t-series variant
+				output = mp.core.combine_mosaic_tests(
+					mosaic_objects=mpts, how_combine_pvals=how,
+				)
+				df = mp.core.combine_mosaic_tests_tseries(
+					mosaic_objects=mpts, how_combine_pvals=how, plot=True, show_plot=False,
+				)
+				# Check that everything looks correct
+				zstat = output['apprx_zstat'].item()
+				expected = np.mean([mpt.apprx_zstat for mpt in mpts])
+				self.assertTrue(
+					zstat == expected,
+					f"zstat {zstat} is not the mean of the apprx zstats {expected}"
+				)
+				zstats = df['apprx_zstat'].values
+				expected = np.stack([mpt.apprx_zstat_tseries for mpt in mpts], axis=0).mean(axis=0)
+				np.testing.assert_array_almost_equal(
+					zstats, expected, decimal=6, err_msg=f"Mean of zstats seems incorrect"
+				)
