@@ -152,13 +152,28 @@ class MosaicPermutationTest(abc.ABC):
 			self.permute_residuals()
 			self.null_statistics[r] = self.test_stat(self._rtilde, **self.tstat_kwargs)
 
-		# compute p-value and return
+		# compute p-value
 		out = compute_adaptive_pval(
 			self.statistic, self.null_statistics
 		)
 		self.pval, self.adapt_stat, self.null_adapt_stats = out
+		
+		# Compute approximate z-statistic
+		# Use adaptive vs. original statistic
+		if d == 1:
+			nstats = self.null_statistics
+			stat = self.statistic
+		else:
+			stat = self.adapt_stat
+			nstats = self.null_adapt_stats
+		# Handle when SD == 0
+		if nstats.std() > 0:
+			self.apprx_zstat = (stat - nstats.mean()) / nstats.std()
+		else:
+			self.apprx_zstat = np.nan
+		
+		# return p-value
 		return self.pval
-
 
 	def fit(
 		self,
@@ -266,7 +281,7 @@ class MosaicPermutationTest(abc.ABC):
 			alpha=0.5,
 			ax=ax,
 		)
-		zstat = str(np.around((stat - nstats.mean()) / nstats.std(), 2))
+		zstat = str(np.around(self.apprx_zstat, 2))
 		if self.pval < 1e-3:
 			pval = "{:e}".format(self.pval)
 		else:
@@ -275,7 +290,7 @@ class MosaicPermutationTest(abc.ABC):
 		ax.axvline(
 			stat, 
 			color='red',
-			label=f'Observed statistic\n(Z={zstat}, pval={pval})',
+			label=f'Observed statistic\n(Apprx. Z={zstat}, pval={pval})',
 		)
 		plt.legend()
 		if show_plot:
@@ -344,6 +359,15 @@ class MosaicPermutationTest(abc.ABC):
 			self.pval_tseries[i] = out[0]
 			self.adapt_stats_tseries[i] = out[1]
 			self.null_adapt_tseries[i] = out[2]
+
+		### Compute z-statistics
+		if self.stats_tseries.shape[1] == 1:
+			ystat = self.stats_tseries[:, 0]
+			ynulls = self.null_tseries[:, :, 0]
+		else:
+			ystat = self.adapt_stats_tseries
+			ynulls = self.null_adapt_tseries
+		self.apprx_zstat_tseries = (ystat - ynulls.mean(axis=1)) / (ynulls.std(axis=1))
 
 	def fit_tseries(
 		self, 
@@ -465,7 +489,7 @@ class MosaicPermutationTest(abc.ABC):
 		axes[1].legend()
 		axes[1].set_ylim(min(0, zvals.min()-zvals.std()/20))
 		# Subplot 2: approximate z-statistic
-		zapprx = (ystat - ynulls.mean(axis=1)) / (ynulls.std(axis=1))
+		zapprx = self.apprx_zstat_tseries
 		axes[2].plot(xvals, zapprx, color='blue', label='Observed')
 		axes[2].scatter(xvals, zapprx, color='blue')
 		axes[2].axhline(
