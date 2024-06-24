@@ -23,6 +23,9 @@ def fast_maxcorr_stat(residuals):
 		np.corrcoef(residuals.T) - np.eye(residuals.shape[1])
 	).max() + np.random.uniform(0, 0.001)
 
+def mean_maxcorr_stat(residuals, **kwargs):
+	return mp.statistics.mean_maxcorr_stat(residuals, **kwargs) + np.random.uniform(0, 0.001)
+
 class TestOLSPanelResids(unittest.TestCase):
 	"""tests ols residual helper"""
 	def test_ols_resids(self):
@@ -156,7 +159,7 @@ class TestMosaicPanelTest(context.MosaicTest):
 		np.random.seed(123)
 		reps = 500
 		nrand = 9
-		n_obs, n_subjects, n_cov = 10, 15, 2
+		n_obs, n_subjects, n_cov = 20, 15, 2
 		# data
 		covariates = stats.laplace.rvs(size=(n_obs, n_subjects, n_cov))
 		beta = stats.laplace.rvs(size=n_cov)
@@ -177,13 +180,14 @@ class TestMosaicPanelTest(context.MosaicTest):
 				mpt = mp.panel.MosaicPanelTest(
 					outcomes=outcomes,
 					covariates=covariates,
-					test_stat=fast_maxcorr_stat,
+					test_stat=fast_maxcorr_stat if not missing_data else mean_maxcorr_stat,
 				) 
 				mpt.fit(nrand=nrand, verbose=False)
 				pvals[r] = mpt.pval
 
 			buckets = np.around(pvals * (nrand + 1)).astype(int)
 			counts = np.bincount(buckets)
+			print(pvals, counts)
 			self.assertTrue(
 				counts[0] == 0,
 				f"with {nrand} randomizations, mosaic panel test produces a p-value < 1/(nrand + 1)"

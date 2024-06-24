@@ -41,3 +41,21 @@ Below, we give a simple example showing how to use ``mosaicperm`` to test whethe
 ```
 
 See the [documentation](https://mosaicperm.readthedocs.io/) for more details.
+
+
+# Reference
+
+If you use ``mosaicperm`` in an academic publication, please consider citing our paper:
+
+```
+@article{mosaic2024,
+  author = {Spector, Asher and Barber, Rina Foygel and Hastie, Trevor and Kahn, Ronald N. and Candès, Emmanuel},
+  title = {The mosaic permutation test: an exact and nonparametric goodness-of-fit test for factor models},
+  date = {2024},
+  annotation = {2024f},
+  eprint = {2404.15017},
+  eprintclass = {stat.ME},
+  eprinttype = {arXiv},
+  url={https://arxiv.org/abs/2404.15017},
+}
+```

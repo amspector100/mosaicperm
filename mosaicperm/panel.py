@@ -103,7 +103,7 @@ class MosaicPanelTest(core.MosaicPermutationTest):
 		if len(covariates.shape) != 3:
 			raise ValueError(f"covariates has shape {covariates.shape} but expected a 3D array")
 		# Process data
-		self.outcomes, self.covariates = core._preprocess_data(
+		self.outcomes, self.covariates, self.missing_pattern = core._preprocess_data(
 			outcomes=outcomes, covariates=covariates
 		)
 		self.n_obs, self.n_subjects = self.outcomes.shape
@@ -185,7 +185,7 @@ class MosaicPanelInference:
 		if len(covariates.shape) != 3:
 			raise ValueError(f"covariates has shape {covariates.shape} but expected a 3D array")
 		# Process data
-		self.outcomes, self.covariates = core._preprocess_data(
+		self.outcomes, self.covariates, self.missing_pattern = core._preprocess_data(
 			outcomes=outcomes, covariates=covariates
 		)
 		self.n_obs, self.n_subjects = self.outcomes.shape

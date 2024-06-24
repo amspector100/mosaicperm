@@ -126,7 +126,7 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 		**kwargs,
 	):
 		# Process data
-		self.outcomes, self.exposures = core._preprocess_data(
+		self.outcomes, self.exposures, self.missing_pattern = core._preprocess_data(
 			outcomes=outcomes, covariates=exposures
 		)
 		self.n_obs, self.n_subjects = outcomes.shape
@@ -308,6 +308,9 @@ class MosaicBCV(MosaicFactorTest):
 			self.pval_tseries[i] = out[0]
 			self.adapt_stats_tseries[i] = out[1]
 			self.null_adapt_tseries[i] = out[2]
+
+		# z-statistics
+		self._compute_apprx_zstat_tseries()
 
 		# create self.starts/self.ends to signal indices of output
 		if window is not None:

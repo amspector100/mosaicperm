@@ -107,6 +107,34 @@ class TestTiles(unittest.TestCase):
 				f"For manual example, batch j={j} equals {batch}, expected {eb}."
 			)
 
+	def test_save_tiles(self):
+		SCRATCH_FILE = "tiling_scratch_file_temp.npy"
+
+		np.random.seed(123)
+		n_obs, n_subjects, n_factors = 100, 200, 2
+		for nstart in [2, 10, 30]:
+			# Create data
+			exposures = context._create_exposures(
+				n_obs=n_obs, n_subjects=n_subjects, n_factors=n_factors, nstart=nstart
+			)
+
+			# Create tiles and try to save/load
+			tiles = mp.tilings.default_factor_tiles(exposures, max_batchsize=7)
+			tiles.save(SCRATCH_FILE)
+			tilesnew = mp.tilings.Tiling.load(SCRATCH_FILE)
+			for k in range(len(tiles)):
+				for i, name in zip([0, 1], ['batch', 'group']):
+					np.testing.assert_array_almost_equal(
+						tiles[k][i],
+						tilesnew[k][i],
+						decimal=5,
+						err_msg=f"{name} k is not equal after saving/loading tiles",
+					)
+
+		# Clean up
+		os.remove(SCRATCH_FILE)
+
+
 	def test_factor_tiles_2d(self):
 		exposures = np.random.randn(10, 2)
 		tiles = mp.tilings.default_factor_tiles(exposures, n_obs=20, max_batchsize=8)
