@@ -7,6 +7,7 @@ import pytest
 import os
 import sys
 from scipy import stats
+import matplotlib
 try:
 	from . import context
 	from .context import mosaicperm as mp
@@ -220,6 +221,7 @@ class TestMosaicFactorTest(context.MosaicTest):
 		# missing data pattern
 		missing_flags = np.random.randn(n_obs, n_subjects)
 		missing_flags = missing_flags < -1.25 
+		missing_flags[0:5] = False # ensure some batches don't have missing data
 
 		# Including simulation setting with data missing at random
 		for missing_data in [True, False]:
@@ -234,6 +236,9 @@ class TestMosaicFactorTest(context.MosaicTest):
 					outcomes=outcomes,
 					exposures=exposures,
 					test_stat=fast_maxcorr_stat,
+					max_batchsize=5,
+					ngroups=2,
+					seed=r,
 				) 
 				mpt.fit(nrand=1, verbose=False)
 				pvals[r] = mpt.pval
@@ -428,7 +433,7 @@ class TestMosaicFactorTest(context.MosaicTest):
 		exposures = np.random.randn(n_obs, n_subjects, n_factors)
 		outcomes = np.random.randn(n_obs, n_subjects)
 		# Fit for two test statistics
-		stats = [mp.statistics.mean_maxcorr_stat, mp.statistics.quantile_maxcorr_stat]
+		stats = [mp.statistics.mean_abscorr_stat, mp.statistics.mean_maxcorr_stat, mp.statistics.quantile_maxcorr_stat]
 		for stat in stats:
 			mptest = mp.factor.MosaicFactorTest(
 				outcomes=outcomes, 
@@ -441,6 +446,7 @@ class TestMosaicFactorTest(context.MosaicTest):
 			mptest.fit_tseries(n_timepoints=10, nrand=50)
 			mptest.plot_tseries()
 			fig, axes = mptest.plot_tseries(figsize=(10,10), show_plot=False)
+			matplotlib.pyplot.close()
 
 class TestMosaicBCV(context.MosaicTest):
 
@@ -476,8 +482,14 @@ class TestMosaicBCV(context.MosaicTest):
 			err_msg=f"MosaicBCV produces unexpected test statistic values"
 		)
 		# test for errors in tseries variant
-		mpt_bcv.fit_tseries(nrand=3, n_timepoints=3)
-		mpt_bcv.plot_tseries(show_plot=False)
+		for window, convolution_mode in zip(
+			[None, 20, 20], 
+			['valid', 'full', 'valid']
+		):
+			mpt_bcv.fit_tseries(
+				nrand=3, n_timepoints=3, window=window, convolution_mode=convolution_mode
+			)
+			mpt_bcv.plot_tseries(show_plot=False)
 
 if __name__ == "__main__":
 	# Run tests---useful if using cprofilev

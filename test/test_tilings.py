@@ -28,7 +28,7 @@ class TestTiles(unittest.TestCase):
 			)
 			tiles = mp.tilings.random_tiles(**tile_args)
 			# Check validity
-			mp.tilings.check_valid_tiling(tiles)
+			tiles = mp.tilings.Tiling(tiles.tiles, check_valid=True)
 			# check correct number of groups
 			batch0 = set(tiles[0][0].tolist())
 			subtiles = [tile for tile in tiles if set(tile[0].tolist()) == batch0]
@@ -43,6 +43,8 @@ class TestTiles(unittest.TestCase):
 				nbatches == tile_args['nbatches'],
 				f"tiles has {nbatches} batches despite nbatches={tile_args['nbatches']}"
 			)
+			# Check the print function 
+			print(tiles)
 
 	def test_factor_tiles_3d(self):
 		np.random.seed(123)
