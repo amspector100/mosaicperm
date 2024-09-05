@@ -81,6 +81,12 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 		allows one to test the null that the residuals are independent
 		between clusters but possibly dependent within clusters.
 		If ``tiles`` is  provided, this argument is ignored.
+	impute_zero : bool
+		If True, missing outcomes are represented as exact zeros
+		in the residual matrix. Else, they are represented as np.nan.
+		Note both methods yield provably valid p-values even if the
+		zero imputation is highly inaccurate; the only difference is 
+		convenience.
 	**kwargs : dict
 		Optional kwargs to :func:`.default_factor_tiles`.
 		Ignored if ``tiles`` is provided.
@@ -124,6 +130,7 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 		test_stat_kwargs: Optional[dict]=None,
 		tiles: Optional[list]=None, 
 		clusters: Optional[np.array]=None,
+		impute_zero: bool=True,
 		**kwargs,
 	):
 		# Data
@@ -135,8 +142,8 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 		self.exposures = exposures.copy()
 		# Remove nans
 		self.n_obs, self.n_subjects = outcomes.shape
-		missing_pattern = np.isnan(self.outcomes)
-		if np.any(missing_pattern):
+		self.missing_pattern = np.isnan(self.outcomes)
+		if np.any(self.missing_pattern):
 			# in this case, must make exposures 3-dimensional since the nan
 			# pattern will causes the exposures to change with time
 			if len(self.exposures.shape) == 2:
@@ -144,8 +151,8 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 					[self.exposures for _ in range(self.n_obs)], axis=0
 				)
 			# fill with zeros (provably preserving validity)
-			self.exposures[missing_pattern] = 0
-			self.outcomes[missing_pattern] = 0
+			self.exposures[self.missing_pattern] = 0
+			self.outcomes[self.missing_pattern] = 0
 		# fill additional missing exposures with zero
 		self.exposures[np.isnan(self.exposures)] = 0
 		# Remove factors with all zero exposures
@@ -171,9 +178,14 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 			)
 		# Readjust outcomes to ensure that missing pattern
 		# does not yield to local exchangeability violations
-		for (batch, group) in self.tiles:
-			missing_subjects = np.any(missing_pattern[np.ix_(batch, group)], axis=0)
-			self.outcomes[np.ix_(batch, group[missing_subjects])] = 0
+		if np.any(self.missing_pattern):
+			for (batch, group) in self.tiles:
+				missing_subjects = np.any(self.missing_pattern[np.ix_(batch, group)], axis=0)
+				self.missing_pattern[np.ix_(batch, group[missing_subjects])] = True
+			self.outcomes[self.missing_pattern] = 0
+			self.exposures[self.missing_pattern] = 0
+		# Save for later
+		self.impute_zero = impute_zero
 
 		# initialize
 		super().__init__()
@@ -214,6 +226,11 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 			A = np.linalg.pinv(Ltile.T @ Ltile) @ Ltile.T
 			hatbeta = (A @ Ytile.T)
 			self.residuals[np.ix_(batch, group)] = Ytile - (Ltile @ hatbeta).T
+
+		# internally, missing data are represented as zeros.
+		# externally, can show that they are nans
+		if not self.impute_zero:
+			self.residuals[self.missing_pattern] = np.nan
 
 		# initialize null permutation object
 		self._rtilde = self.residuals.copy()

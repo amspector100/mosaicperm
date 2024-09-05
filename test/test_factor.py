@@ -283,42 +283,55 @@ class TestMosaicFactorTest(context.MosaicTest):
 		outcomes = np.random.randn(n_obs, n_subjects)
 		outcomes[outcomes < -1.25] = np.nan
 		missing_pattern = np.isnan(outcomes)
-		# create residuals
-		mpt = mp.factor.MosaicFactorTest(
-			outcomes=outcomes, exposures=exposures, test_stat=None
-		)
-		mpt.compute_mosaic_residuals()
-		# Check that preprocessing worked
-		np.testing.assert_array_almost_equal(
-			mpt.exposures[np.isnan(outcomes)].flatten(),
-			0,
-			decimal=5,
-			err_msg=f"Mosaic processed exposures are nonzero even for missing outcomes"
-		)
-
-		# check orthogonality
-		for i in range(n_obs):
-			subjects = np.where(~np.isnan(outcomes[i]))[0]
-			np.testing.assert_array_almost_equal(
-				exposures[i, subjects].T @ mpt.residuals[i, subjects],
-				np.zeros(n_factors),
-				decimal=5,
-				err_msg=f"Mosaic with 3D exposures and missing outcomes does not enforce orthogonality"
+		for impute_zero in [True, False]:
+			# create residuals
+			mpt = mp.factor.MosaicFactorTest(
+				outcomes=outcomes, exposures=exposures, test_stat=None, impute_zero=impute_zero
 			)
+			mpt.compute_mosaic_residuals()
+			# Check that preprocessing worked
+			if impute_zero:
+				np.testing.assert_array_almost_equal(
+					mpt.exposures[np.isnan(outcomes)].flatten(),
+					0,
+					decimal=5,
+					err_msg=f"Mosaic processed exposures are nonzero even for missing outcomes"
+				)
+			else:
+				self.assertTrue(
+					np.all(np.isnan(mpt.residuals[np.isnan(outcomes)])),
+					f"Mosaic residuals with impute_zero=False are not nan for missing outcomes"
+				)
 
-		# Check that local exchangeability is preserved
-		for (batch, group) in mpt.tiles:
-			for j in group:
-				zero_prop = np.mean(mpt.outcomes[batch, j] == 0)
-				self.assertTrue(
-					zero_prop in [0.0,1.0],
-					f"For asset={j}, batch={batch}, outcomes={mpt.outcomes[batch, j]} has a mix of zeros and non zeros"
-				)
-				expected = float(np.any(missing_pattern[batch, j] == 1))
-				self.assertTrue(
-					zero_prop == expected,
-					f"For asset={j}, batch={batch}, zero_prop={zero_prop} should equal {expected} based on missing pattern."
-				)
+			# check orthogonality
+			if impute_zero:
+				for i in range(n_obs):
+					subjects = np.where(~np.isnan(outcomes[i]))[0]
+					np.testing.assert_array_almost_equal(
+						exposures[i, subjects].T @ mpt.residuals[i, subjects],
+						np.zeros(n_factors),
+						decimal=5,
+						err_msg=f"Mosaic with 3D exposures and missing outcomes does not enforce orthogonality"
+					)
+			# Check local exchangeability is preserved
+			for (batch, group) in mpt.tiles:
+				for j in group:
+					for array_to_test, arr_name in zip([mpt.outcomes, mpt.exposures, mpt.residuals], ['outcomes', 'exposures', 'residuals']):
+						if impute_zero or arr_name != 'residuals':
+							missing_prop = np.mean(array_to_test[batch, j] == 0)
+							impute_val = 'zero'
+						else:
+							missing_prop = np.mean(np.isnan(array_to_test[batch, j]))
+							impute_val = 'nan'
+						self.assertTrue(
+							missing_prop in [0.0,1.0],
+							f"For asset={j}, batch={batch}, {arr_name}={array_to_test[batch, j]} has a mix of {impute_val}s and non-{impute_val}s"
+						)
+						expected = float(np.any(missing_pattern[batch, j] == 1))
+						self.assertTrue(
+							missing_prop == expected,
+							f"For {arr_name}, asset={j}, batch={batch}, missing_prop={missing_prop} should equal {expected} based on missing pattern."
+						)
 
 	def test_nans_constant_within_tiles(self):
 		# Repeat with the missing pattern by patch
