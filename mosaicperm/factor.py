@@ -29,14 +29,16 @@ def ols_residuals(
 	"""
 	# Case 1: exposures do not change with time
 	if len(exposures.shape) == 2:
-		Q, _ = np.linalg.qr(exposures)
-		return outcomes - (Q @ (Q.T @ outcomes.T)).T
+		A = np.linalg.pinv(exposures.T @ exposures)
+		hatbeta = A @ exposures.T @ outcomes.T
+		return outcomes - (exposures @ hatbeta).T
 	# Case 2: exposures change with time
 	elif len(exposures.shape) == 3:
 		residuals = np.zeros(outcomes.shape)
 		for i in range(len(residuals)):
-			Q, _ = np.linalg.qr(exposures[i])
-			residuals[i] = outcomes[i] - Q @ (Q.T @ outcomes[i])
+			A = np.linalg.pinv(exposures[i].T @ exposures[i])
+			hatbeta = (A @ exposures[i].T) @ outcomes[i]
+			residuals[i] = outcomes[i] - exposures[i] @ hatbeta
 		return residuals
 	else:
 		raise ValueError(f"Exposures must be a 2D or 3D array, but has shape {exposures.shape}")
@@ -80,6 +82,12 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 		allows one to test the null that the residuals are independent
 		between clusters but possibly dependent within clusters.
 		If ``tiles`` is  provided, this argument is ignored.
+	impute_zero : bool
+		If True, missing outcomes are represented as exact zeros
+		in the residual matrix. Else, they are represented as np.nan.
+		Note both methods yield provably valid p-values even if the
+		zero imputation is highly inaccurate; the only difference is 
+		convenience.
 	**kwargs : dict
 		Optional kwargs to :func:`.default_factor_tiles`.
 		Ignored if ``tiles`` is provided.
@@ -123,6 +131,7 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 		test_stat_kwargs: Optional[dict]=None,
 		tiles: Optional[tilings.Tiling]=None, 
 		clusters: Optional[np.array]=None,
+		impute_zero: bool=True,
 		**kwargs,
 	):
 		# Process data
@@ -130,6 +139,24 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 			outcomes=outcomes, covariates=exposures
 		)
 		self.n_obs, self.n_subjects = outcomes.shape
+		if np.any(self.missing_pattern):
+			# in this case, must make exposures 3-dimensional since the nan
+			# pattern will causes the exposures to change with time
+			if len(self.exposures.shape) == 2:
+				self.exposures = np.stack(
+					[self.exposures for _ in range(self.n_obs)], axis=0
+				)
+			# fill with zeros (provably preserving validity)
+			self.exposures[self.missing_pattern] = 0
+			self.outcomes[self.missing_pattern] = 0
+		# fill additional missing exposures with zero
+		self.exposures[np.isnan(self.exposures)] = 0
+		# Remove factors with all zero exposures
+		if len(self.exposures.shape) == 3:
+			to_keep = np.any(self.exposures != 0, axis=(0,1))
+		else:
+			to_keep = np.any(self.exposures != 0, axis=0)
+		self.exposures = self.exposures[..., to_keep]
 		# Test statistic
 		self.test_stat = test_stat
 		self.tstat_kwargs = test_stat_kwargs
@@ -145,6 +172,16 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 				clusters=self.clusters,
 				**kwargs
 			)
+		# Readjust outcomes to ensure that missing pattern
+		# does not yield to local exchangeability violations
+		if np.any(self.missing_pattern):
+			for (batch, group) in self.tiles:
+				missing_subjects = np.any(self.missing_pattern[np.ix_(batch, group)], axis=0)
+				self.missing_pattern[np.ix_(batch, group[missing_subjects])] = True
+			self.outcomes[self.missing_pattern] = 0
+			self.exposures[self.missing_pattern] = 0
+		# Save for later
+		self.impute_zero = impute_zero
 		# initialize
 		super().__init__()
 
@@ -175,15 +212,27 @@ class MosaicFactorTest(core.MosaicPermutationTest):
 
 			# Compute residuals
 			Ytile = self.outcomes[np.ix_(batch, group)] # len(batch) x len(group)
-			Q, _ = np.linalg.qr(Ltile) # Q is len(group) x n_factors
-			self.residuals[np.ix_(batch, group)] = (Ytile.T - Q @ (Q.T @ Ytile.T)).T
+
+			## This is faster but appears to be numerically unstable in edge cases?
+			#Q, _ = np.linalg.qr(Ltile) # Q is len(group) x n_factors
+			#self.residuals[np.ix_(batch, group)] = (Ytile.T - Q @ (Q.T @ Ytile.T)).T
+
+			## This is 2x as expensive but stable
+			A = np.linalg.pinv(Ltile.T @ Ltile) @ Ltile.T
+			hatbeta = (A @ Ytile.T)
+			self.residuals[np.ix_(batch, group)] = Ytile - (Ltile @ hatbeta).T
+
+		# internally, missing data are represented as zeros.
+		# externally, can show that they are nans
+		if not self.impute_zero:
+			self.residuals[self.missing_pattern] = np.nan
 
 		# initialize null permutation object
 		self._rtilde = self.residuals.copy()
 		return self.residuals
 
 
-def _window_sum(x: np.array, window: Optional[int]):
+def _window_sum(x: np.array, window: Optional[int], mode: str='valid'):
 	"""
 	Returns np.cumsum(x) if window is None. 
 	Else, returns np.convolve(x, np.ones(window), 'valid').
@@ -191,7 +240,7 @@ def _window_sum(x: np.array, window: Optional[int]):
 	if window is None:
 		return np.cumsum(x)
 	else:
-		return np.convolve(x, np.ones(window), 'valid')
+		return np.convolve(x, np.ones(window), mode)
 
 class MosaicBCV(MosaicFactorTest):
 	__doc__ = """
@@ -266,8 +315,10 @@ class MosaicBCV(MosaicFactorTest):
 
 
 	def _compute_p_value_tseries(
-		self, nrand: int, verbose: bool, n_timepoints: int, window: Optional[int],
+		self, nrand: int, verbose: bool, n_timepoints: int, window: Optional[int], convolution_mode: str='valid',
 	):
+		if convolution_mode not in ['valid', 'full']:
+			raise ValueError(f"convolution_mode={convolution_mode} is not supported.") 
 		# Note:
 		# The docs/signature are inherited from the core MosaicFactorTest class.
 		# oos_r2s
@@ -279,7 +330,11 @@ class MosaicBCV(MosaicFactorTest):
 
 		n_models = len(new_exposures)
 		active = np.any(new_exposures != 0, axis=0) # actuve features
-		baseline = _window_sum(np.sum(self.residuals[:, active]**2, axis=1), window=window)
+		baseline = _window_sum(
+			np.sum(self.residuals[:, active]**2, axis=1), 
+			window=window,
+			mode=convolution_mode,
+		)
 		
 		_stats = np.zeros((len(baseline), nrand+1, n_models))
 		# Initialize so _stats[:, 0] is the true statistic. 
@@ -290,7 +345,7 @@ class MosaicBCV(MosaicFactorTest):
 					self._rtilde, new_exposure=new_exposures[i], tiles=tiles, mus=mus
 				)
 				oos_l2s = np.sum(oos_resids[:, active]**2, axis=1) # n_obs length array
-				oos_errors = _window_sum(oos_l2s, window=window)
+				oos_errors = _window_sum(oos_l2s, window=window, mode=convolution_mode)
 				_stats[:, r, i] = 1 - oos_errors / baseline
 			# Permute
 			self.permute_residuals()
@@ -314,8 +369,16 @@ class MosaicBCV(MosaicFactorTest):
 
 		# create self.starts/self.ends to signal indices of output
 		if window is not None:
-			self.starts = np.arange(0, self.n_obs - window + 1)
-			self.ends = np.arange(window, self.n_obs + 1)
+			if convolution_mode == 'valid':
+				self.starts = np.arange(0, self.n_obs - window + 1)
+				self.ends = np.arange(window, self.n_obs + 1)
+			elif convolution_mode == 'full':
+				self.starts = np.concatenate(
+					[np.zeros(window - 1), np.arange(0, self.n_obs)]
+				).astype(int)
+				self.ends = np.concatenate(
+					[np.arange(1, self.n_obs+1), self.n_obs * np.ones(window-1)]
+				).astype(int)
 		else:
 			self.starts = np.zeros(self.n_obs)
 			self.ends = np.arange(1, self.n_obs+1)

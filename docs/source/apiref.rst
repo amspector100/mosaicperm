@@ -26,6 +26,7 @@ Test statistics (``mosaicperm.statistics``)
 .. autosummary::
    :toctree: generated/
 
+   ~mosaicperm.statistics.mean_abscorr_stat
    ~mosaicperm.statistics.mean_maxcorr_stat
    ~mosaicperm.statistics.quantile_maxcorr_stat
    ~mosaicperm.statistics.mosaic_bcv_stat

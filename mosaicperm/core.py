@@ -142,7 +142,8 @@ def _create_tseries_plot(
 	
 	## Subplot 1: p-value
 	zvals = stats.norm.ppf(1-pvals)
-	zvals[zvals == - np.inf] = zvals[zvals > - np.inf].min()
+	if np.any(zvals != -np.inf):
+		zvals[zvals == - np.inf] = zvals[zvals > - np.inf].min()
 	axes[1].plot(xvals, zvals, color='blue', label='Observed')
 	axes[1].scatter(xvals, zvals, color='blue')
 	axes[1].axhline(
@@ -183,7 +184,6 @@ class MosaicPermutationTest(abc.ABC):
 	"""
 	def __init__(self):
 		self._precompute_permutation_helpers()
-		self._enforce_local_exchangeability()
 
 	def _precompute_permutation_helpers(self):
 		"""
@@ -204,18 +204,6 @@ class MosaicPermutationTest(abc.ABC):
 			self._tilenums[br, gr] = i
 			self._batchinds[br, gr] = np.arange(counter, counter+len(batch)).reshape(-1, 1)
 			counter += len(batch)
-
-	def _enforce_local_exchangeability(self):
-		# Readjust outcomes to ensure that missing pattern
-		# does not cause local exchangeability violations
-		for (batch, group) in self.tiles:
-			missing_subjects = np.any(
-				self.missing_pattern[np.ix_(batch, group)], 
-				# the following line is equivalent to axis=0 if outcomes is 2D
-				axis=tuple([x for x in range(self.outcomes.ndim) if x != 1]),
-			)
-			self.outcomes[np.ix_(batch, group[missing_subjects])] = 0
-			self.missing_pattern[np.ix_(batch, group[missing_subjects])] = True
 
 	@abc.abstractmethod
 	def compute_mosaic_residuals(self):
@@ -310,11 +298,12 @@ class MosaicPermutationTest(abc.ABC):
 		else:
 			stat = self.adapt_stat
 			nstats = self.null_adapt_stats
+		comb = np.concatenate([[stat], nstats.flatten()])
 		# Handle when SD == 0
-		if nstats.std() > 0:
-			self.apprx_zstat = (stat - nstats.mean()) / nstats.std()
+		if comb.std() > 0:
+			self.apprx_zstat = (stat - comb.mean()) / comb.std()
 		else:
-			self.apprx_zstat = np.nan
+			self.apprx_zstat = 0
 		
 		# return p-value
 		return self.pval
@@ -452,8 +441,15 @@ class MosaicPermutationTest(abc.ABC):
 		else:
 			ystat = self.adapt_stats_tseries
 			ynulls = self.null_adapt_tseries
-		self.apprx_zstat_tseries = (ystat - ynulls.mean(axis=1)) / (ynulls.std(axis=1))
-
+		# Concatenate for exact validity
+		ycomb = np.concatenate([ystat.reshape(-1, 1), ynulls], axis=1)
+		ses = ycomb.std(axis=1)
+		# prevent zero div errors; note if ses == 0, the zstat == 0
+		zero_flags = ses == 0
+		ses[zero_flags] = 1
+		# Form z-stats
+		self.apprx_zstat_tseries = (ystat - ycomb.mean(axis=1)) / ses
+		self.apprx_zstat_tseries[zero_flags] = 0
 
 	def _compute_p_value_tseries(
 		self, nrand: int, verbose: bool, n_timepoints: int, window: Optional[int], 
@@ -527,6 +523,7 @@ class MosaicPermutationTest(abc.ABC):
 		verbose: bool=True, 
 		n_timepoints: int=20,
 		window: Optional[int]=None, 
+		**kwargs,
 	):
 		"""
 		Runs mosaic permutation tests for various windows of the data,
@@ -543,6 +540,8 @@ class MosaicPermutationTest(abc.ABC):
 			timepoints. Default: 20.
 		window : int
 			Window size. Default: None (use all available data).
+		kwargs : dict
+			Optional kwargs for private _compute_p_value_tseries() method.
 
 		Returns
 		-------
@@ -550,7 +549,7 @@ class MosaicPermutationTest(abc.ABC):
 		"""
 		self.compute_mosaic_residuals()
 		self._compute_p_value_tseries(
-			nrand=nrand, verbose=verbose, n_timepoints=n_timepoints, window=window
+			nrand=nrand, verbose=verbose, n_timepoints=n_timepoints, window=window, **kwargs
 		)
 		return self
 
@@ -680,7 +679,7 @@ def combine_mosaic_tests(
 			index=['statistic', 'null_statistic_mean', 'apprx_zstat', 'p-value'],
 		)
 	except AttributeError as e:
-		raise AttributeError("combine_mosaic_tests raised AttributeError---try calling .fit()?")
+		raise AttributeError(f"combine_mosaic_tests raised AttributeError {e}---try calling .fit()?")
 
 def combine_mosaic_tests_tseries(
 	mosaic_objects,

@@ -38,13 +38,27 @@ def mean_maxcorr_stat(
 ) -> float:
 	"""
 	Mean maximum (absolute) correlation statistic.
+	This is defined as:
+
+	.. math::
+		\\begin{align*}
+			\\frac{1}{p} \\sum_{i=1}^p \\max_{j \\ne i} |\\hat C_{i,j}|
+		\\end{align*}
+
+	where :math:`\\hat C_{i,j}` is the empirical correlation between 
+	the residuals of subjects i and j.
 
 	Parameters
 	----------
 	residuals : np.array
 		(n_obs, n_subjects) array of residuals
 	kwargs : dict
-		kwargs for ``active_subset`` preprocessing function.`
+		kwargs for ``active_subset`` preprocessing function.
+
+	Returns
+	-------
+	mmc : float
+		Mean maximum absolute correlation.
 	"""
 	subset = active_subset(residuals, **kwargs)
 	# max correlation
@@ -54,6 +68,39 @@ def mean_maxcorr_stat(
 	# return mean max corr
 	return np.mean(maxcorrs)
 
+def mean_abscorr_stat(
+	residuals: np.array, 
+	**kwargs
+) -> float:
+	"""
+	Mean absolute correlation statistic.
+	This is defined as:
+
+	.. math::
+		\\begin{align*}
+			\\frac{1}{\\binom{p}{2}} \\sum_{i=1}^p \\sum_{j < i} |\\hat C_{i,j}|
+		\\end{align*}
+
+	where :math:`\\hat C_{i,j}` is the empirical correlation between 
+	the residuals of subjects i and j.
+
+	Parameters
+	----------
+	residuals : np.array
+		(n_obs, n_subjects) array of residuals
+	kwargs : dict
+		kwargs for ``active_subset`` preprocessing function.`
+
+	Returns
+	-------
+	mac : float
+		Mean absolute correlation.
+	"""
+	subset = active_subset(residuals, **kwargs)
+	# max correlation
+	C = np.corrcoef(residuals[:, subset].T)
+	return np.abs(C)[np.triu_indices(C.shape[0], 1)].mean()
+
 def quantile_maxcorr_stat(
 	residuals: np.array, 
 	qs: Optional[np.array]=DEFAULT_QS,
@@ -61,6 +108,18 @@ def quantile_maxcorr_stat(
 ) -> np.array:
 	"""
 	Quantiles of maximum (absolute) correlation statistic.
+	This is defined as:
+
+	.. math::
+		\\begin{align*}
+			\\text{Quantile}\\left(
+				\\left\\{\\max_{j \\ne i} |\\hat C_{i,j}|\\right\\}_{i=1}^p, 
+				q
+			\\right)
+		\\end{align*}
+
+	for each q in ``qs``, where :math:`\\hat C_{i,j}` is the empirical correlation between 
+	the residuals of subjects i and j.
 
 	Parameters
 	----------
@@ -70,6 +129,11 @@ def quantile_maxcorr_stat(
 		Array of quantiles.
 	kwargs : dict
 		kwargs for ``active_subset`` preprocessing function.`
+
+	Returns
+	-------
+	qmc : np.array
+		Vector of quantiles of maximum correlations.
 	"""
 	subset = active_subset(residuals, **kwargs)
 	# max correlation

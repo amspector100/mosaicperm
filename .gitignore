@@ -4,6 +4,7 @@ quicktest.ipynb
 data/*
 docs/build/
 docs/dir/
+docs/source/generated/
 # Don't save test profiling
 prof/*
 proftest/*

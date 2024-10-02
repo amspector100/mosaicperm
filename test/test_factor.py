@@ -7,6 +7,7 @@ import pytest
 import os
 import sys
 from scipy import stats
+import matplotlib
 try:
 	from . import context
 	from .context import mosaicperm as mp
@@ -220,6 +221,7 @@ class TestMosaicFactorTest(context.MosaicTest):
 		# missing data pattern
 		missing_flags = np.random.randn(n_obs, n_subjects)
 		missing_flags = missing_flags < -1.25 
+		missing_flags[0:5] = False # ensure some batches don't have missing data
 
 		# Including simulation setting with data missing at random
 		for missing_data in [True, False]:
@@ -234,6 +236,9 @@ class TestMosaicFactorTest(context.MosaicTest):
 					outcomes=outcomes,
 					exposures=exposures,
 					test_stat=fast_maxcorr_stat,
+					max_batchsize=5,
+					ngroups=2,
+					seed=r,
 				) 
 				mpt.fit(nrand=1, verbose=False)
 				pvals[r] = mpt.pval
@@ -273,47 +278,60 @@ class TestMosaicFactorTest(context.MosaicTest):
 	def test_nan_handling_3d(self):
 		# Create data
 		np.random.randn(123)
-		n_obs, n_subjects, n_factors = 15, 20, 3
+		n_obs, n_subjects, n_factors = 15, 50, 3
 		exposures = np.random.randn(n_obs, n_subjects, n_factors)
 		outcomes = np.random.randn(n_obs, n_subjects)
 		outcomes[outcomes < -1.25] = np.nan
 		missing_pattern = np.isnan(outcomes)
-		# create residuals
-		mpt = mp.factor.MosaicFactorTest(
-			outcomes=outcomes, exposures=exposures, test_stat=None
-		)
-		mpt.compute_mosaic_residuals()
-		# Check that preprocessing worked
-		np.testing.assert_array_almost_equal(
-			mpt.exposures[np.isnan(outcomes)].flatten(),
-			0,
-			decimal=5,
-			err_msg=f"Mosaic processed exposures are nonzero even for missing outcomes"
-		)
-
-		# check orthogonality
-		for i in range(n_obs):
-			subjects = np.where(~np.isnan(outcomes[i]))[0]
-			np.testing.assert_array_almost_equal(
-				exposures[i, subjects].T @ mpt.residuals[i, subjects],
-				np.zeros(n_factors),
-				decimal=5,
-				err_msg=f"Mosaic with 3D exposures and missing outcomes does not enforce orthogonality"
+		for impute_zero in [True, False]:
+			# create residuals
+			mpt = mp.factor.MosaicFactorTest(
+				outcomes=outcomes, exposures=exposures, test_stat=None, impute_zero=impute_zero
 			)
+			mpt.compute_mosaic_residuals()
+			# Check that preprocessing worked
+			if impute_zero:
+				np.testing.assert_array_almost_equal(
+					mpt.exposures[np.isnan(outcomes)].flatten(),
+					0,
+					decimal=5,
+					err_msg=f"Mosaic processed exposures are nonzero even for missing outcomes"
+				)
+			else:
+				self.assertTrue(
+					np.all(np.isnan(mpt.residuals[np.isnan(outcomes)])),
+					f"Mosaic residuals with impute_zero=False are not nan for missing outcomes"
+				)
 
-		# Check that local exchangeability is preserved
-		for (batch, group) in mpt.tiles:
-			for j in group:
-				zero_prop = np.mean(mpt.outcomes[batch, j] == 0)
-				self.assertTrue(
-					zero_prop in [0.0,1.0],
-					f"For asset={j}, batch={batch}, outcomes={mpt.outcomes[batch, j]} has a mix of zeros and non zeros"
-				)
-				expected = float(np.any(missing_pattern[batch, j] == 1))
-				self.assertTrue(
-					zero_prop == expected,
-					f"For asset={j}, batch={batch}, zero_prop={zero_prop} should equal {expected} based on missing pattern."
-				)
+			# check orthogonality
+			if impute_zero:
+				for i in range(n_obs):
+					subjects = np.where(~np.isnan(outcomes[i]))[0]
+					np.testing.assert_array_almost_equal(
+						exposures[i, subjects].T @ mpt.residuals[i, subjects],
+						np.zeros(n_factors),
+						decimal=5,
+						err_msg=f"Mosaic with 3D exposures and missing outcomes does not enforce orthogonality"
+					)
+			# Check local exchangeability is preserved
+			for (batch, group) in mpt.tiles:
+				for j in group:
+					for array_to_test, arr_name in zip([mpt.outcomes, mpt.exposures, mpt.residuals], ['outcomes', 'exposures', 'residuals']):
+						if impute_zero or arr_name != 'residuals':
+							missing_prop = np.mean(np.abs(array_to_test[batch, j]) < 1e-10)
+							impute_val = 'zero'
+						else:
+							missing_prop = np.mean(np.isnan(array_to_test[batch, j]))
+							impute_val = 'nan'
+						self.assertTrue(
+							missing_prop in [0.0,1.0],
+							f"For asset={j}, batch={batch}, {arr_name}={array_to_test[batch, j]} has a mix of {impute_val}s and non-{impute_val}s"
+						)
+						expected = float(np.any(missing_pattern[batch, j] == 1))
+						self.assertTrue(
+							missing_prop == expected,
+							f"For {arr_name}, asset={j}, batch={batch}, missing_prop={missing_prop} should equal {expected} based on missing pattern."
+						)
 
 	def test_nans_constant_within_tiles(self):
 		# Repeat with the missing pattern by patch
@@ -371,7 +389,7 @@ class TestMosaicFactorTest(context.MosaicTest):
 				f"mpt.statistics contains nans"
 			)
 			# Fit time series variant and make sure no errors
-			mpt.fit_tseries(nrand=2, n_timepoints=3)
+			mpt.fit_tseries(nrand=3, n_timepoints=3)
 			mpt.plot_tseries(show_plot=False)
 
 	@patch("matplotlib.pyplot.show")
@@ -428,7 +446,7 @@ class TestMosaicFactorTest(context.MosaicTest):
 		exposures = np.random.randn(n_obs, n_subjects, n_factors)
 		outcomes = np.random.randn(n_obs, n_subjects)
 		# Fit for two test statistics
-		stats = [mp.statistics.mean_maxcorr_stat, mp.statistics.quantile_maxcorr_stat]
+		stats = [mp.statistics.mean_abscorr_stat, mp.statistics.mean_maxcorr_stat, mp.statistics.quantile_maxcorr_stat]
 		for stat in stats:
 			mptest = mp.factor.MosaicFactorTest(
 				outcomes=outcomes, 
@@ -441,6 +459,7 @@ class TestMosaicFactorTest(context.MosaicTest):
 			mptest.fit_tseries(n_timepoints=10, nrand=50)
 			mptest.plot_tseries()
 			fig, axes = mptest.plot_tseries(figsize=(10,10), show_plot=False)
+			matplotlib.pyplot.close()
 
 class TestMosaicBCV(context.MosaicTest):
 
@@ -476,8 +495,14 @@ class TestMosaicBCV(context.MosaicTest):
 			err_msg=f"MosaicBCV produces unexpected test statistic values"
 		)
 		# test for errors in tseries variant
-		mpt_bcv.fit_tseries(nrand=5, n_timepoints=3)
-		mpt_bcv.plot_tseries(show_plot=False)
+		for window, convolution_mode in zip(
+			[None, 20, 20], 
+			['valid', 'full', 'valid']
+		):
+			mpt_bcv.fit_tseries(
+				nrand=3, n_timepoints=3, window=window, convolution_mode=convolution_mode
+			)
+			mpt_bcv.plot_tseries(show_plot=False)
 
 if __name__ == "__main__":
 	# Run tests---useful if using cprofilev

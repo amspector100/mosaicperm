@@ -256,7 +256,21 @@ class MosaicPanelTest(core.MosaicPermutationTest):
 				**kwargs
 			)
 		# initialize
+		self._enforce_local_exchangeability()
 		super().__init__()
+
+	def _enforce_local_exchangeability(self):
+		# Readjust outcomes to ensure that missing pattern
+		# does not cause local exchangeability violations
+		for (batch, group) in self.tiles:
+			missing_subjects = np.any(
+				self.missing_pattern[np.ix_(batch, group)], 
+				# the following line is equivalent to axis=0 if outcomes is 2D
+				axis=tuple([x for x in range(self.outcomes.ndim) if x != 1]),
+			)
+			self.outcomes[np.ix_(batch, group[missing_subjects])] = 0
+			self.covariates[np.ix_(batch, group[missing_subjects])] = 0
+			self.missing_pattern[np.ix_(batch, group[missing_subjects])] = True
 
 	def compute_mosaic_residuals(self) -> np.array:
 		"""

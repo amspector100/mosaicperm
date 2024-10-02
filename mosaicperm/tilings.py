@@ -295,6 +295,7 @@ def random_tiles(
 def default_factor_tiles(
 	exposures: np.array,
 	n_obs: Optional[int]=None,
+	batches: Optional[list[np.array]]=None,
 	max_batchsize: Optional[int]=10,
 	ngroups: Optional[int]=None,
 	clusters: Optional[np.array]=None,
@@ -312,6 +313,9 @@ def default_factor_tiles(
 		the exposures do not change with time.	
 	n_obs : int
 		Number of timepoints. Optional unless exposures is 2D.
+	batches : int
+		Optional list of np.arrays partitioning {0, 1, ..., ``n_obs-1``}.
+		Otherwise will be created automatically (recommended).
 	max_batchsize : int
 		Maximum length (in time) of a tile.
 	ngroups : int
@@ -326,6 +330,10 @@ def default_factor_tiles(
 	seed: int
 		Random seed.
 
+	Notes
+	-----
+	One of exposures or batches must be provided.
+
 	Returns
 	-------
 	tiles : mosaicperm.tilings.Tiling
@@ -336,21 +344,23 @@ def default_factor_tiles(
 	# Choose batches
 	if len(exposures.shape) == 3:
 		n_obs, n_subjects, n_factors = exposures.shape
-		batches = _exposures_to_batches(exposures, max_batchsize=max_batchsize)
+		if batches is None:
+			batches = _exposures_to_batches(exposures, max_batchsize=max_batchsize)
 	elif len(exposures.shape) == 2:
 		# Defaults for dimensionality
 		if n_obs is None:
 			raise ValueError(f"n_obs must be provided if exposures is a 2D array.")
 		n_subjects, n_factors = exposures.shape
-		nbatches = int(np.ceil(n_obs / max_batchsize))
 		# Create batches
-		batches = even_random_partition(n=n_obs, k=nbatches, shuffle=False)
+		if batches is None:
+			nbatches = int(np.ceil(n_obs / max_batchsize))
+			batches = even_random_partition(n=n_obs, k=nbatches, shuffle=False)
 	else:
 		raise ValueError(f"exposures should be a 2D or 3D array but has shape {exposures.shape}")
 
 	# Partition subjects and construct tiles
 	if ngroups is None:
-		ngroups = max(2, int(np.ceil(n_subjects / (5*n_factors))))
+		ngroups = max(2, int(np.floor(n_subjects / (5*n_factors))))
 
 	tiles = []
 	for batch in batches:
