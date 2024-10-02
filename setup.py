@@ -39,5 +39,9 @@ setuptools.setup(
 		"scipy>=1.11.0",
 		"pandas>=2.0.0",
 		"tqdm",
+		# this one day may be replaced by scipy.sparse 
+		# if scipy supports N-d sparse arrays
+		"sparse>=0.15.4", 
+		"sklearn",
 	],
 )

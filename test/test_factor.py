@@ -458,7 +458,7 @@ class TestMosaicBCV(context.MosaicTest):
 		mpt_bcv = mp.factor.MosaicBCV(
 			outcomes=outcomes[n0:], exposures=exposures[n0:], new_exposures=new_exposures,
 		)
-		mpt_bcv.fit(nrand=2).summary()
+		mpt_bcv.fit(nrand=5).summary()
 		# fit manual variant
 		tiles = mpt_bcv.tiles
 		mpt = mp.factor.MosaicFactorTest(
@@ -468,7 +468,7 @@ class TestMosaicBCV(context.MosaicTest):
 			test_stat=mp.statistics.adaptive_mosaic_bcv_stat,
 			test_stat_kwargs={"tiles":tiles, "new_exposures":new_exposures}
 		)
-		mpt.fit(nrand=3).summary()
+		mpt.fit(nrand=5).summary()
 		# test that themarginal statistics are the same
 		np.testing.assert_array_almost_equal(
 			mpt.statistic, mpt_bcv.statistic,
@@ -476,7 +476,7 @@ class TestMosaicBCV(context.MosaicTest):
 			err_msg=f"MosaicBCV produces unexpected test statistic values"
 		)
 		# test for errors in tseries variant
-		mpt_bcv.fit_tseries(nrand=3, n_timepoints=3)
+		mpt_bcv.fit_tseries(nrand=5, n_timepoints=3)
 		mpt_bcv.plot_tseries(show_plot=False)
 
 if __name__ == "__main__":

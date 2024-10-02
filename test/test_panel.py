@@ -6,6 +6,7 @@ import pytest
 import os
 import sys
 from scipy import stats
+import sparse
 try:
 	from . import context
 	from .context import mosaicperm as mp
@@ -21,35 +22,61 @@ def fast_maxcorr_stat(residuals):
 	"""
 	return np.abs(
 		np.corrcoef(residuals.T) - np.eye(residuals.shape[1])
-	).max() + np.random.uniform(0, 0.001)
+	).max(axis=0).mean() + np.random.uniform(0, 1e-6)
 
 def mean_maxcorr_stat(residuals, **kwargs):
-	return mp.statistics.mean_maxcorr_stat(residuals, **kwargs) + np.random.uniform(0, 0.001)
+	return mp.statistics.mean_maxcorr_stat(residuals, **kwargs) + np.random.uniform(0, 1e-6)
 
 class TestOLSPanelResids(unittest.TestCase):
 	"""tests ols residual helper"""
 	def test_ols_resids(self):
 		np.random.seed(123)
-		n_obs, n_subjects, n_cov = 30, 40, 5
-		covariates = np.random.randn(n_obs, n_subjects, n_cov)
-		outcomes = np.random.randn(n_obs, n_subjects)
-		# residuals
-		residuals = mp.panel.ols_residuals_panel(outcomes, covariates)
-		# test accuracy without assuming alignment is correct
-		Xflat = covariates.reshape(-1, n_cov, order='C')
-		yflat = outcomes.flatten(order='C')
-		hatbeta = np.linalg.inv(Xflat.T @ Xflat) @ Xflat.T @ yflat
-		residflat = yflat - Xflat @ hatbeta
-		for _ in range(10):
-			i = np.random.choice(n_obs)
-			j = np.random.choice(n_subjects)
-			k = np.where(np.all(covariates[i, j] == Xflat, axis=-1))[0].item()
-			np.testing.assert_array_almost_equal(
-				residflat[k], 
-				residuals[i, j],
-				decimal=5,
-				err_msg=f"Panel factor residuals are inaccurate at i={i}, j={j}"
-			)
+		all_dims = [(8, 2, 6), (30, 40)]
+		n_cov = 5
+		for dims in all_dims:
+			outcomes = np.random.randn(*dims)
+			covariates = np.random.randn(*tuple(list(dims) + [n_cov]))
+			# residuals with different backends
+			residuals_dense_cov = mp.panel.ols_residuals_panel(outcomes, covariates)
+			residuals_sparse_cov = mp.panel.ols_residuals_panel(outcomes, sparse.COO(covariates))
+			# test accuracy without assuming alignment is correct
+			Xflat = covariates.reshape(-1, n_cov, order='C')
+			yflat = outcomes.flatten(order='C')
+			hatbeta = np.linalg.inv(Xflat.T @ Xflat) @ Xflat.T @ yflat
+			residflat = yflat - Xflat @ hatbeta
+			for residuals, name in zip(
+				[residuals_dense_cov, residuals_sparse_cov], ['dense_cov', 'sparse_cov']
+			):
+				for _ in range(10):
+					coords = tuple([np.random.choice(dimsize) for dimsize in dims])
+					k = np.where(np.all(covariates[coords] == Xflat, axis=-1))[0].item()
+					np.testing.assert_array_almost_equal(
+						residflat[k], 
+						residuals[coords],
+						decimal=5,
+						err_msg=f"Panel factor {name} residuals are inaccurate at coords={coords}"
+					)
+
+	def test_ols_fixed_effect_resids(self):
+		dims = (8, 5, 3, 5)
+		n_cov = 5
+		outcomes = np.random.randn(*dims)
+		covariates = np.random.randn(*tuple(list(dims) + [n_cov]))
+		fx_axis = 3
+		# Check residuals with fixed effects using two methods
+		# method 1: default
+		residuals = mp.panel.ols_residuals_panel(outcomes, covariates, fex_formula=str(fx_axis))
+		# method 2: de-meaning
+		outcomes_new = outcomes - outcomes.mean(axis=tuple(x for x in range(len(dims)) if x != fx_axis))
+		covariates_new = covariates - covariates.mean(axis=tuple(x for x in range(len(dims)) if x != fx_axis))
+		residuals_new = mp.panel.ols_residuals_panel(outcomes_new, covariates_new)
+		# Test accuracy
+		np.testing.assert_array_almost_equal(
+			residuals,
+			residuals_new,
+			decimal=5,
+			err_msg=f"Panel factor residuals with one-way fixed effects are inaccurate"
+		)
 
 class TestMosaicPanelTest(context.MosaicTest):
 	"""
@@ -122,27 +149,28 @@ class TestMosaicPanelTest(context.MosaicTest):
 		n_obs, n_subjects, n_cov = 150, 200, 20
 		covariates = np.random.randn(n_obs, n_subjects, n_cov)
 		outcomes = np.random.randn(n_obs, n_subjects)
-		# Construct and permute residuals
-		mpt = mp.panel.MosaicPanelTest(outcomes=outcomes, covariates=covariates, test_stat=None)
-		mpt.compute_mosaic_residuals()
-		mpt.permute_residuals()
-		# check equality within tiles
-		for tilenum, (batch, group) in enumerate(mpt.tiles):
-			# Same elements in different order
-			np.testing.assert_array_almost_equal(
-				np.sort(np.unique(mpt.residuals[np.ix_(batch, group)])), 
-				np.sort(np.unique(mpt._rtilde[np.ix_(batch, group)])),
-				decimal=5,
-				err_msg=f"for tilenum={tilenum}, mpt residuals and _rtilde do not have the same elements in different orders"
-			)
-			# The tiles have the same rows but in different orders
-			tile = mpt.residuals[np.ix_(batch, group)]
-			tile_perm = mpt._rtilde[np.ix_(batch, group)]
-			intersection = np.unique(np.concatenate([tile, tile_perm], axis=0), axis=0)
-			self.assertTrue(
-				intersection.shape == tile.shape,
-				f"For tile={tilenum}, the permuted tile does not have the same rows as the original tile"
-			)
+		for ngroups in [1, 10, 20]:
+			# Construct and permute residuals
+			mpt = mp.panel.MosaicPanelTest(outcomes=outcomes, covariates=covariates, test_stat=None, ngroups=ngroups)
+			mpt.compute_mosaic_residuals()
+			mpt.permute_residuals()
+			# check equality within tiles
+			for tilenum, (batch, group) in enumerate(mpt.tiles):
+				# Same elements in different order
+				np.testing.assert_array_almost_equal(
+					np.sort(np.unique(mpt.residuals[np.ix_(batch, group)])), 
+					np.sort(np.unique(mpt._rtilde[np.ix_(batch, group)])),
+					decimal=5,
+					err_msg=f"for tilenum={tilenum}, mpt residuals and _rtilde do not have the same elements in different orders"
+				)
+				# The tiles have the same rows but in different orders
+				tile = mpt.residuals[np.ix_(batch, group)]
+				tile_perm = mpt._rtilde[np.ix_(batch, group)]
+				intersection = np.unique(np.concatenate([tile, tile_perm], axis=0), axis=0)
+				self.assertTrue(
+					intersection.shape == tile.shape,
+					f"For ngroups={ngroups}, tile={tilenum}, the permuted tile does not have the same rows as the original tile"
+				)
 
 		# Make sure globally the residuals are accurate
 		self.assertTrue(
@@ -169,9 +197,11 @@ class TestMosaicPanelTest(context.MosaicTest):
 		missing_flags = missing_flags < -1.25 
 
 		# Including simulation setting with data missing at random
-		for missing_data in [True, False]:
+		for missing_data in [False, True]:
 			pvals = np.zeros(reps)
+			test_stats = np.zeros(reps)
 			for r in range(reps):
+				np.random.seed(r)
 				outcomes = stats.laplace.rvs(size=(n_obs, n_subjects)) + mu
 				if missing_data:
 					outcomes[missing_flags] = np.nan
@@ -183,6 +213,7 @@ class TestMosaicPanelTest(context.MosaicTest):
 					test_stat=fast_maxcorr_stat if not missing_data else mean_maxcorr_stat,
 				) 
 				mpt.fit(nrand=nrand, verbose=False)
+				test_stats[r] = mpt.statistic
 				pvals[r] = mpt.pval
 
 			buckets = np.around(pvals * (nrand + 1)).astype(int)
@@ -197,7 +228,9 @@ class TestMosaicPanelTest(context.MosaicTest):
 				len(counts) == nrand + 1,
 				f"with {nrand} randomizations, pvals only has {len(counts)} unique values (unique pvals={np.unique(pvals)})"
 			)
-
+			print("Pvals\n", pvals)
+			print("tstats\n", test_stats)
+			print(f"Missing={missing_data}")
 			self.pearson_chi_square_test(counts, test_name='MosaicPanelTest p-values', alpha=0.001)
 
 class TestMosaicPanelInference(context.MosaicTest):

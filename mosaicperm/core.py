@@ -88,10 +88,7 @@ def _preprocess_data(outcomes: np.array, covariates: np.array) -> tuple:
 	# Fill missing additional covariates with zero
 	covariates[np.isnan(covariates)] = 0
 	### 3. remove exposures/covariates which are all zero
-	if len(covariates.shape) == 3:
-		to_keep = np.any(covariates != 0, axis=(0,1))
-	else:
-		to_keep = np.any(covariates != 0, axis=0)
+	to_keep = np.any(covariates != 0, axis=tuple(range(covariates.ndim-1)))
 	covariates = covariates[..., to_keep]
 	return outcomes, covariates, missing_pattern
 
@@ -193,12 +190,12 @@ class MosaicPermutationTest(abc.ABC):
 		Precomputes some matrices to ensure faster tile permutations.
 		"""
 		# maps i, j to the tile number
-		self._tilenums = np.empty(self.outcomes.shape, dtype=int)
+		self._tilenums = np.empty(self.outcomes.shape[0:2], dtype=int)
 		# sum of batch lengths
 		self._batchlen_sum = np.sum([len(batch) for batch, _ in self.tiles])
 		# self._batchinds[i, j] maps coordinate (i, j) to a unique coordinate
 		# from 0 to self.batchlen_sum depending only on i and the tile of i,j
-		self._batchinds = np.zeros(self.outcomes.shape, dtype=int)
+		self._batchinds = np.zeros(self.outcomes.shape[0:2], dtype=int)
 		# loop through and fill
 		counter = 0
 		for i, (batch, group) in enumerate(self.tiles):
@@ -212,8 +209,13 @@ class MosaicPermutationTest(abc.ABC):
 		# Readjust outcomes to ensure that missing pattern
 		# does not cause local exchangeability violations
 		for (batch, group) in self.tiles:
-			missing_subjects = np.any(self.missing_pattern[np.ix_(batch, group)], axis=0)
+			missing_subjects = np.any(
+				self.missing_pattern[np.ix_(batch, group)], 
+				# the following line is equivalent to axis=0 if outcomes is 2D
+				axis=tuple([x for x in range(self.outcomes.ndim) if x != 1]),
+			)
 			self.outcomes[np.ix_(batch, group[missing_subjects])] = 0
+			self.missing_pattern[np.ix_(batch, group[missing_subjects])] = True
 
 	@abc.abstractmethod
 	def compute_mosaic_residuals(self):
@@ -241,7 +243,7 @@ class MosaicPermutationTest(abc.ABC):
 			- 'ix' is naive and has complexity O(``n_subjects`` * ``n_obs``) but uses
 			  a for loop and can be slow in practice.
 			- 'argsort' has complexity O(``n_obs`` log(``n_obs``) * ``n_subjects``) but 
-			  is faster in practice.
+			  is often faster in practice.
 
 		Returns
 		-------

@@ -279,6 +279,7 @@ def random_tiles(
 	tiles : mosaicperm.tilings.Tiling
 		The default tiling as a :class:`.Tiling` object.
 	"""
+	state = np.random.get_state()
 	np.random.seed(seed)
 	# partition along timepoints
 	batches = even_random_partition(n=n_obs, k=nbatches, shuffle=False)
@@ -287,7 +288,8 @@ def random_tiles(
 	for batch in batches:
 		groups = even_random_partition(n=n_subjects, k=ngroups, shuffle=True)
 		tiles.extend([(batch, group) for group in groups])
-	# return tiles
+	# return tiles; also reset random state
+	np.random.set_state(state)
 	return Tiling(tiles)
 
 def default_factor_tiles(
@@ -329,6 +331,7 @@ def default_factor_tiles(
 	tiles : mosaicperm.tilings.Tiling
 		The default tiling as a :class:`.Tiling` object.
 	"""
+	state = np.random.get_state()
 	np.random.seed(seed)
 	# Choose batches
 	if len(exposures.shape) == 3:
@@ -359,6 +362,9 @@ def default_factor_tiles(
 			groups = [np.where(coarsened == k)[0] for k in np.unique(coarsened)]
 		# Add to tiles
 		tiles.extend([(batch.astype(int), group.astype(int)) for group in groups])
+
+	# return; also reset state
+	np.random.set_state(state)
 	return Tiling(tiles)
 
 
@@ -423,9 +429,10 @@ def default_panel_tiles(
 	n_obs: int,
 	n_subjects: int,
 	n_cov: int,
-	clusters=None,
-	ngroups=None,
-	ntiles=None,
+	clusters: Optional[np.array]=None,
+	ngroups: Optional[int]=None,
+	ntiles: Optional[int]=None,
+	seed: int=123,
 ):
 	"""
 	Creates the default tiling for panel data.
@@ -453,6 +460,8 @@ def default_panel_tiles(
 	tiles : mosaicperm.tilings.Tiling
 		The default tiling as a :class:`.Tiling` object.	
 	"""
+	state = np.random.get_state()
+	np.random.seed(seed)
 	# Goal: total number of tiles
 	if ntiles is None:
 		ntiles = min(int(n_obs * n_subjects / (4*n_cov)), 10)
@@ -473,6 +482,8 @@ def default_panel_tiles(
 		n=n_obs, k=nbatches, shuffle=False
 	)
 	tiles = list(itertools.product(batches, groups))
+	# reset state and return
+	np.random.set_state(state)
 	return Tiling(tiles)
 
 
