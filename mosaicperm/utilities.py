@@ -2,6 +2,7 @@ import os
 import time
 import numpy as np
 import pandas as pd
+import scipy.sparse
 from tqdm.auto import tqdm
 from typing import Optional
 
@@ -76,3 +77,56 @@ def load_sample_dataset(
 	exposures.columns.name = 'Factor'
 	# return
 	return outcomes, exposures
+
+def get_dummies_sparse(
+	data: pd.DataFrame,
+	missing_pattern: Optional[np.array]=None,
+	drop_first: bool=True,
+):
+	"""
+	Creates sparse dummies based on a dataframe.
+	
+	Parameters
+	----------
+	data : pd.DataFrame
+		DataFrame of discrete variables to create dummies.
+	missing_pattern : np.array
+		Boolean n-length array indicating missing outcomes.
+		I.e., outcome i is missing iff missing_pattern[i] = True.
+	drop_first : bool
+		Whether to get k-1 dummies out of k categorical levels by 
+		removing the first level.
+	
+	Returns
+	-------
+	dummies : scipy.sparse.csr_matrix
+
+	Notes
+	-----
+	The pandas variant of this function has a known bug
+	where it does not actually produce sparse matrices.
+	"""
+	if missing_pattern is None:
+		missing_pattern = np.zeros(len(data), dtype=bool)
+	sparse_colnum = 0
+	xinds = []
+	yinds = []
+	for column in data.columns:
+		# Find unique values
+		values = data[column].values
+		unq_vals = np.unique(values)
+		if drop_first: 
+			unq_vals = unq_vals[0:-1]
+		# Loop through and create sparse matrix
+		for value in unq_vals:
+			x = np.where((values == value) & (~missing_pattern))[0]
+			xinds.append(x)
+			yinds.append(sparse_colnum * np.ones(len(x), dtype=int))
+			sparse_colnum += 1
+
+	# Put it all together
+	xinds = np.concatenate(xinds)
+	yinds = np.concatenate(yinds)
+	return scipy.sparse.csr_matrix(
+		(np.ones(len(xinds)), (xinds, yinds)), shape=(len(data), sparse_colnum)
+	)

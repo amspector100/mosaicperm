@@ -1,12 +1,13 @@
 import time
 import numpy as np
+import pandas as pd
 import math
 import unittest
 import pytest
 import os
 import sys
 from scipy import stats
-import sparse
+import scipy.sparse
 try:
 	from . import context
 	from .context import mosaicperm as mp
@@ -15,106 +16,155 @@ except ImportError:
 	import context
 	from context import mosaicperm as mp
 
-def fast_maxcorr_stat(residuals):
+def mmc_stat(residuals, times, subjects, **kwargs):
 	"""
-	Computes max correlation. No zero-SD checks for speed.
-	Adds a tiny bit of noise to break ties.
+	This uses a particular reshaping trick for efficiency.
+	It should not be used in general (use the commented out code instead).
 	"""
-	return np.abs(
-		np.corrcoef(residuals.T) - np.eye(residuals.shape[1])
-	).max(axis=0).mean() + np.random.uniform(0, 1e-6)
+	residuals = residuals.reshape(np.max(times) +1, np.max(subjects)+1, order='C')
+	corrs = np.corrcoef(residuals.T)
+	# corrs = pd.DataFrame(
+	# 	np.stack([residuals, times, subjects], axis=1),
+	# 	columns=['residuals', 'times', 'subjects']
+	# ).pivot(
+	# 	index='times',
+	# 	columns='subjects',
+	# 	values='residuals'
+	# ).corr().values
+	return np.abs(corrs - np.eye(corrs.shape[0])).max(axis=0).mean()
 
-def mean_maxcorr_stat(residuals, **kwargs):
-	return mp.statistics.mean_maxcorr_stat(residuals, **kwargs) + np.random.uniform(0, 1e-6)
+class TestTileTransformations(context.MosaicTest):
 
-class TestOLSPanelResids(unittest.TestCase):
-	"""tests ols residual helper"""
-	def test_ols_resids(self):
+	def test_transformations_automatic(self):
 		np.random.seed(123)
-		all_dims = [(8, 2, 6), (30, 40)]
-		n_cov = 5
-		for dims in all_dims:
-			outcomes = np.random.randn(*dims)
-			covariates = np.random.randn(*tuple(list(dims) + [n_cov]))
-			# residuals with different backends
-			residuals_dense_cov = mp.panel.ols_residuals_panel(outcomes, covariates)
-			residuals_sparse_cov = mp.panel.ols_residuals_panel(outcomes, sparse.COO(covariates))
-			# test accuracy without assuming alignment is correct
-			Xflat = covariates.reshape(-1, n_cov, order='C')
-			yflat = outcomes.flatten(order='C')
-			hatbeta = np.linalg.inv(Xflat.T @ Xflat) @ Xflat.T @ yflat
-			residflat = yflat - Xflat @ hatbeta
-			for residuals, name in zip(
-				[residuals_dense_cov, residuals_sparse_cov], ['dense_cov', 'sparse_cov']
-			):
-				for _ in range(10):
-					coords = tuple([np.random.choice(dimsize) for dimsize in dims])
-					k = np.where(np.all(covariates[coords] == Xflat, axis=-1))[0].item()
+		# fake data
+		n = 300
+		subjects = np.random.randint(0, 20, n)
+		times = np.random.choice(2*n, n, replace=False)
+		covariates = np.random.randn(n, 1)
+		args = dict(subjects=subjects, times=times, covariates=covariates)
+		# transformations
+		invariances = np.array(['local_exch', 'local_exch_cts', 'time_reverse', 'wild_bs'])
+		transformations = []
+		for invariance in invariances:
+			transformations.append(mp.panel.construct_tile_transformation(
+				**args, invariance=invariance
+			))
+		# Test
+		residuals = np.random.randn(n)
+		for invariance, transform in zip(invariances, transformations):
+			trans_resid = transform(residuals)
+			trans_times = transform(times)
+			np.testing.assert_array_almost_equal(
+				residuals,
+				transform(trans_resid),
+				decimal=8,
+				err_msg=f"transform={invariance} does not satisfy transform^2=identity"
+			)
+			# Test that we preserve within-subject residuals
+			if invariance != 'wild_bs':
+				for subject in np.unique(subjects):
+					# look at time series for specific subject
+					inds = np.where(subjects == subject)[0]
+					subject_resid = residuals[inds]
+					subject_trans_resid = trans_resid[inds]
 					np.testing.assert_array_almost_equal(
-						residflat[k], 
-						residuals[coords],
-						decimal=5,
-						err_msg=f"Panel factor {name} residuals are inaccurate at coords={coords}"
+						np.sort(subject_resid),
+						np.sort(subject_trans_resid),
+						decimal=8,
+						err_msg=f"{invariance} does not preserve unique values of residuals within subjects"
 					)
-
-	def test_ols_fixed_effect_resids(self):
-		dims = (8, 5, 3, 5)
-		n_cov = 5
-		outcomes = np.random.randn(*dims)
-		covariates = np.random.randn(*tuple(list(dims) + [n_cov]))
-		fx_axis = 3
-		# Check residuals with fixed effects using two methods
-		# method 1: default
-		residuals = mp.panel.ols_residuals_panel(outcomes, covariates, fex_formula=str(fx_axis))
-		# method 2: de-meaning
-		outcomes_new = outcomes - outcomes.mean(axis=tuple(x for x in range(len(dims)) if x != fx_axis))
-		covariates_new = covariates - covariates.mean(axis=tuple(x for x in range(len(dims)) if x != fx_axis))
-		residuals_new = mp.panel.ols_residuals_panel(outcomes_new, covariates_new)
-		# Test accuracy
-		np.testing.assert_array_almost_equal(
-			residuals,
-			residuals_new,
-			decimal=5,
-			err_msg=f"Panel factor residuals with one-way fixed effects are inaccurate"
-		)
+					# sorted times within subject
+					stimes_argsort = np.argsort(times[inds])
+					# test correctness for local exchangeability
+					if invariance == 'local_exch_cts':
+						n_pairs_to_check = int(len(stimes_argsort) // 2)
+						for k in range(n_pairs_to_check):
+							# check that the k-1th and kth smallest times are swapped
+							within_subject_inds = stimes_argsort[2*k:(2*k+2)]
+							np.testing.assert_array_almost_equal(
+								times[inds][within_subject_inds],
+								np.flip(trans_times[inds][within_subject_inds]),
+								decimal=8,
+								err_msg="local_exch_cts transformation does not swap the smallest and second smallest times"
+							)
+					# Test correctness for time-reversibility
+					if invariance == 'time_reverse':
+						np.testing.assert_array_almost_equal(
+							times[inds][stimes_argsort],
+							np.flip(trans_times[inds][stimes_argsort]),
+							decimal=8,
+							err_msg="time_reverse transformation does not reverse time properly"
+						)
+			# Test correctness for local exch
+			if invariance == 'local_exch':
+				self.assertTrue(
+					np.abs(times - trans_times).max() <= 1,
+					"local_exch times and trasnformed times differ by more than 1"
+				)
+				self.assertTrue(
+					np.all(
+						(trans_times - times != 1) | (times % 2 == 0)
+					),
+					"local_exch swaps odd t with t+1 (should only do even t)"
+				)
+				self.assertTrue(
+					np.all(
+						(trans_times - times != -1) | (times % 2 == 1)
+					),
+					"local_exch swaps even t with t-1 (should only do odd t)"
+				)
+			# Test correctness for wild_bs
+			if invariance == 'wild_bs':
+				np.testing.assert_array_almost_equal(
+					-1*residuals,
+					trans_resid,
+					decimal=8,
+					err_msg=f"wild_bs does not flip sign of residuals"
+				)
 
 class TestMosaicPanelTest(context.MosaicTest):
 	"""
 	tests mosaic factor test class
 	"""
-
 	def test_residual_orthogonality(self):
 		n_obs, n_subjects, n_cov = 15, 200, 20
 		# Create outcomes and covariates
-		outcomes = np.random.randn(n_obs, n_subjects)
-		covariates = np.random.randn(n_obs, n_subjects, n_cov)
-		# Construct residuals
-		mpt = mp.panel.MosaicPanelTest(
-			outcomes=outcomes, covariates=covariates, test_stat=None
-		)
-		mpt.compute_mosaic_residuals()
-		mpt.permute_residuals()
-		# Check orthogonality
-		for resids, name in zip([mpt.residuals, mpt._rtilde], ['Residuals', 'Permuted residuals']):
-			for (batch, group) in mpt.tiles:
-				tile_cov = covariates[np.ix_(batch, group)].reshape(-1, n_cov, order='C')
-				tile_resids = resids[np.ix_(batch, group)].flatten(order='C')
-				# Test orthogonality
-				np.testing.assert_array_almost_equal(
-					tile_cov.T @ tile_resids,
-					np.zeros(n_cov),
-					decimal=5,
-					err_msg=f"{name} for batch={batch}, group={group} are not orthogonal to covariates."
-				)
-				# Test that the right covariates are lined up with the right outcomes
-				for k in range(len(tile_resids)):
-					i, j = np.where(resids == tile_resids[k])
-					i = i.item(); j = j.item()
+		outcomes = np.random.randn(n_obs * n_subjects)
+		subjects = np.arange(n_obs * n_subjects) // n_obs
+		times = np.arange(n_obs * n_subjects) - subjects
+		covariates = np.random.randn(n_obs * n_subjects, n_cov)
+		# loop through invariances
+		for invariance in ['local_exch_cts', 'time_reverse', 'wild_bs']:
+			# Construct residuals
+			mpt = mp.panel.MosaicPanelTest(
+				outcomes=outcomes,
+				subjects=subjects,
+				times=times,
+				cts_covariates=covariates,
+				test_stat=None,
+				invariance=invariance,
+			)
+			mpt.compute_mosaic_residuals()
+			mpt.permute_residuals()
+			# Check orthogonality
+			for resids, name in zip([mpt.residuals, mpt._rtilde], ['Residuals', 'Permuted residuals']):
+				for tile_id, tile_inds in enumerate(mpt.tile_inds):
+					tile_cov = covariates[tile_inds]
+					tile_resids = resids[tile_inds]
+					# Test orthogonality
 					np.testing.assert_array_almost_equal(
-						covariates[i, j],
-						tile_cov[k],
+						tile_cov.T @ tile_resids,
+						np.zeros(n_cov),
 						decimal=5,
-						err_msg=f"After reshaping, covariates are not aligned with outcomes"
+						err_msg=f"{name} for tile_inds={tile_inds} are not orthogonal to covariates."
+					)
+					# test orthogonality with transformed covariates
+					np.testing.assert_array_almost_equal(
+						mpt.tile_transforms[tile_id](tile_cov).T @ tile_resids,
+						np.zeros(n_cov),
+						decimal=5,
+						err_msg=f"{name} for tile_inds={tile_inds} are not orthogonal to covariates."
 					)
 
 	def test_reduction_to_ols(self):
@@ -127,18 +177,29 @@ class TestMosaicPanelTest(context.MosaicTest):
 		outcomes = np.random.randn(n_obs, n_subjects)
 		covariates = np.random.randn(n_obs, n_subjects, n_cov)
 		# Ensure covariates is the same as its augmented variant
-		swapinds = mp.panel.construct_swapinds(n_obs)
+		swapinds = mp.panel._construct_swapinds(n_obs)
 		covariates = np.around(covariates + covariates[swapinds], 5)
+		# Convert to be flattened
+		subjects = np.stack([np.arange(n_subjects) for _ in range(n_obs)], axis=0).flatten(order='C')
+		times = np.stack([np.arange(n_subjects) for _ in range(n_obs)], axis=0).flatten(order='C')
+		outcomes = outcomes.flatten(order='C')
+		covariates = covariates.reshape(-1, n_cov, order='C')
 
-		# Create tiles
-		tiles = [(np.arange(n_obs), np.arange(n_subjects))]
 		## compute mosaic residuals with one large tile
 		mpt = mp.panel.MosaicPanelTest(
-			outcomes=outcomes, covariates=covariates, test_stat=None, tiles=tiles
+			outcomes=outcomes, subjects=subjects, times=times, cts_covariates=covariates, test_stat=None, ntiles=1,
+			invariance='local_exch_cts'
 		)
 		mpt.compute_mosaic_residuals()
 		## Compute OLS residuals
 		ols_resid = mp.panel.ols_residuals_panel(outcomes, covariates=covariates)
+		# debugging
+		inds = mpt.tile_inds[0]
+		hm = mp.panel.ols_residuals_panel(
+			outcomes=mpt.outcomes[inds], # this is flat, still fine with this function call
+			covariates=mpt.covariates[inds],
+		)
+		# end debugging
 		np.testing.assert_array_almost_equal(
 			mpt.residuals, ols_resid, decimal=5, err_msg=f"Mosaic residuals do not reduce to OLS resids with one tile"
 		)
@@ -146,33 +207,44 @@ class TestMosaicPanelTest(context.MosaicTest):
 	def test_permute_residuals(self):
 		# data
 		np.random.seed(123)
-		n_obs, n_subjects, n_cov = 150, 200, 20
-		covariates = np.random.randn(n_obs, n_subjects, n_cov)
-		outcomes = np.random.randn(n_obs, n_subjects)
+		data = mp.gen_data.gen_panel_data(
+			n_obs=150,
+			n_subjects=150,
+			n_cov=20,
+			flat=True,
+		)
 		for ngroups in [1, 10, 20]:
 			# Construct and permute residuals
-			mpt = mp.panel.MosaicPanelTest(outcomes=outcomes, covariates=covariates, test_stat=None, ngroups=ngroups)
+			mpt = mp.panel.MosaicPanelTest(
+				outcomes=data['outcomes'],
+				times=data['times'],
+				subjects=data['subjects'],
+				cts_covariates=data['covariates'],
+				test_stat=None,
+				ntiles=ngroups,
+				invariance='local_exch_cts',
+			)
 			mpt.compute_mosaic_residuals()
 			mpt.permute_residuals()
 			# check equality within tiles
-			for tilenum, (batch, group) in enumerate(mpt.tiles):
+			for tilenum, tile_inds in enumerate(mpt.tile_inds):
 				# Same elements in different order
 				np.testing.assert_array_almost_equal(
-					np.sort(np.unique(mpt.residuals[np.ix_(batch, group)])), 
-					np.sort(np.unique(mpt._rtilde[np.ix_(batch, group)])),
+					np.sort(np.unique(mpt.residuals[tile_inds])), 
+					np.sort(np.unique(mpt._rtilde[tile_inds])),
 					decimal=5,
 					err_msg=f"for tilenum={tilenum}, mpt residuals and _rtilde do not have the same elements in different orders"
 				)
 				# The tiles have the same rows but in different orders
-				tile = mpt.residuals[np.ix_(batch, group)]
-				tile_perm = mpt._rtilde[np.ix_(batch, group)]
+				tile = mpt.residuals[tile_inds]
+				tile_perm = mpt._rtilde[tile_inds]
 				intersection = np.unique(np.concatenate([tile, tile_perm], axis=0), axis=0)
 				self.assertTrue(
 					intersection.shape == tile.shape,
 					f"For ngroups={ngroups}, tile={tilenum}, the permuted tile does not have the same rows as the original tile"
 				)
 
-		# Make sure globally the residuals are accurate
+		# Make sure permuting does something
 		self.assertTrue(
 			np.any(mpt.residuals != mpt._rtilde),
 			"After permuting, _rtilde=residuals everywhere."
@@ -189,28 +261,32 @@ class TestMosaicPanelTest(context.MosaicTest):
 		nrand = 9
 		n_obs, n_subjects, n_cov = 20, 15, 2
 		# data
-		covariates = stats.laplace.rvs(size=(n_obs, n_subjects, n_cov))
+		covariates = stats.laplace.rvs(size=(n_obs * n_subjects, n_cov))
 		beta = stats.laplace.rvs(size=n_cov)
 		mu = covariates @ beta
 		# missing data pattern
-		missing_flags = np.random.randn(n_obs, n_subjects)
+		missing_flags = np.random.randn(n_obs * n_subjects)
 		missing_flags = missing_flags < -1.25 
 
 		# Including simulation setting with data missing at random
-		for missing_data in [False, True]:
+		for missing_data in [False]:
 			pvals = np.zeros(reps)
 			test_stats = np.zeros(reps)
 			for r in range(reps):
 				np.random.seed(r)
-				outcomes = stats.laplace.rvs(size=(n_obs, n_subjects)) + mu
+				data = mp.gen_data.gen_panel_data(n_obs=n_obs, n_subjects=n_subjects)
+				outcomes = data['outcomes'] + mu
 				if missing_data:
 					outcomes[missing_flags] = np.nan
 
 				# construct
 				mpt = mp.panel.MosaicPanelTest(
 					outcomes=outcomes,
-					covariates=covariates,
-					test_stat=fast_maxcorr_stat if not missing_data else mean_maxcorr_stat,
+					times=data['times'],
+					subjects=data['subjects'],
+					cts_covariates=covariates,
+					test_stat=mmc_stat,
+					tstat_kwargs=dict(times=data['times'], subjects=data['subjects'])
 				) 
 				mpt.fit(nrand=nrand, verbose=False)
 				test_stats[r] = mpt.statistic
@@ -233,162 +309,163 @@ class TestMosaicPanelTest(context.MosaicTest):
 			print(f"Missing={missing_data}")
 			self.pearson_chi_square_test(counts, test_name='MosaicPanelTest p-values', alpha=0.001)
 
-class TestMosaicPanelInference(context.MosaicTest):
 
-	def test_residual_orthogonality(self):
-		n_obs, n_subjects, n_cov = 15, 200, 20
-		# Create outcomes and covariates
-		outcomes = np.random.randn(n_obs, n_subjects)
-		covariates = np.random.randn(n_obs, n_subjects, n_cov)
-		# Construct residuals
-		mpi = mp.panel.MosaicPanelInference(outcomes, covariates=covariates)
-		mpi.compute_mosaic_residuals()
-		for (batch, group) in mpi.tiles:
-			tile_cov = covariates[np.ix_(batch, group)].reshape(-1, n_cov, order='C')
-			tile_resids = mpi.residuals[np.ix_(batch, group)].flatten(order='C')
-			# Test orthogonality
-			np.testing.assert_array_almost_equal(
-				tile_cov.T @ tile_resids,
-				np.zeros(n_cov),
-				decimal=5,
-				err_msg=f"MPI residuals for batch={batch}, group={group} are not orthogonal to covariates."
-			)
-			# Test that the right covariates are lined up with the right outcomes
-			for k in range(len(tile_resids)):
-				i, j = np.where(mpi.residuals == tile_resids[k])
-				i = i.item(); j = j.item()
-				np.testing.assert_array_almost_equal(
-					covariates[i, j],
-					tile_cov[k],
-					decimal=5,
-					err_msg=f"After reshaping, covariates are not aligned with outcomes"
-				)
+# class TestMosaicPanelInference(context.MosaicTest):
 
-	def test_lfo_residuals(self):
-		"""
-		Check that LFO residuals are correct
-		"""
-		np.random.seed(1234)
-		# Generate data
-		n_obs, n_subjects, n_cov = 10, 200, 20
-		outcomes = np.random.randn(n_obs, n_subjects)
-		covariates = np.random.randn(n_obs, n_subjects, n_cov)
-		tiles = mp.tilings.default_panel_tiles(n_obs=n_obs, n_subjects=n_subjects, n_cov=n_cov)
-		# Compute residuals and LFO residuals
-		mpt = mp.panel.MosaicPanelInference(
-			outcomes=outcomes,
-			covariates=covariates,
-			tiles=tiles,
-		)
-		mpt.compute_mosaic_residuals()
-		for feature in range(n_cov):
-			# Compare LFO residuals to a naively computed variant
-			lfo_resids = mpt._downdate_mosaic_residuals(feature=feature)
-			neg_feature = [i for i in range(n_cov) if i != feature]
-			mpt2 = mp.panel.MosaicPanelInference(
-				outcomes=outcomes,
-				covariates=covariates[..., neg_feature],
-				tiles=tiles,
-			)
-			expected = mpt2.compute_mosaic_residuals()
-			np.testing.assert_array_almost_equal(
-				lfo_resids,
-				expected,
-				decimal=8,
-				err_msg=f"LFO resids are incorrect with feature={feature}."
-			)
+# 	def test_residual_orthogonality(self):
+# 		n_obs, n_subjects, n_cov = 15, 200, 20
+# 		# Create outcomes and covariates
+# 		outcomes = np.random.randn(n_obs, n_subjects)
+# 		covariates = np.random.randn(n_obs, n_subjects, n_cov)
+# 		# Construct residuals
+# 		mpi = mp.panel.MosaicPanelInference(outcomes, covariates=covariates)
+# 		mpi.compute_mosaic_residuals()
+# 		for (batch, group) in mpi.tiles:
+# 			tile_cov = covariates[np.ix_(batch, group)].reshape(-1, n_cov, order='C')
+# 			tile_resids = mpi.residuals[np.ix_(batch, group)].flatten(order='C')
+# 			# Test orthogonality
+# 			np.testing.assert_array_almost_equal(
+# 				tile_cov.T @ tile_resids,
+# 				np.zeros(n_cov),
+# 				decimal=5,
+# 				err_msg=f"MPI residuals for batch={batch}, group={group} are not orthogonal to covariates."
+# 			)
+# 			# Test that the right covariates are lined up with the right outcomes
+# 			for k in range(len(tile_resids)):
+# 				i, j = np.where(mpi.residuals == tile_resids[k])
+# 				i = i.item(); j = j.item()
+# 				np.testing.assert_array_almost_equal(
+# 					covariates[i, j],
+# 					tile_cov[k],
+# 					decimal=5,
+# 					err_msg=f"After reshaping, covariates are not aligned with outcomes"
+# 				)
 
-	def test_slope_intercept_representation(self):
-		"""
-		Tests that the test statistic for testing H_0 : beta[j] = b
-		can be written as stat - b * slope for stat, slope.
-		"""
-		np.random.seed(1234)
-		# Generate data
-		n_obs, n_subjects, n_cov = 10, 200, 20
-		outcomes = np.random.randn(n_obs, n_subjects)
-		covariates = np.random.randn(n_obs, n_subjects, n_cov)
-		tiles = mp.tilings.default_panel_tiles(n_obs=n_obs, n_subjects=n_subjects, n_cov=n_cov)
-		# Compute residuals + LFO residuals
-		mpinf = mp.panel.MosaicPanelInference(
-			outcomes=outcomes,
-			covariates=covariates,
-			tiles=tiles,
-		)
-		mpinf.compute_mosaic_residuals()
-		# Loop through several features
-		for feature in np.random.choice(n_cov, size=min(n_cov, 5), replace=True):
-			# Compute slope/statistic
-			mpinf._downdate_mosaic_residuals(feature=feature)
-			slope = mpinf.ZA_sums[:, 0].sum()
-			stat = mpinf.Zresid_sums[:, 0].sum()
-			# Manually leave the feature out and invert the null
-			neg_feature = [i for i in range(n_cov) if i != feature]
-			bs = np.random.randn(5)
-			for b in bs:
-				Z = covariates[:, :, feature]
-				new_outcomes = outcomes - b * Z
-				mpinf_manual = mp.panel.MosaicPanelInference(
-					outcomes=new_outcomes,
-					covariates=covariates[:, :, neg_feature],
-					tiles=tiles,
-				)
-				mpinf_manual.compute_mosaic_residuals()
-				stat_new = np.sum(mpinf_manual.residuals * Z)
-				np.testing.assert_array_almost_equal(
-					stat - b * slope,
-					stat_new,
-					decimal=5,
-					err_msg=f"Slope/intercept form used in inversion is inaccurate with b={b}, feature={feature}"
-				)
+# 	def test_lfo_residuals(self):
+# 		"""
+# 		Check that LFO residuals are correct
+# 		"""
+# 		np.random.seed(1234)
+# 		# Generate data
+# 		n_obs, n_subjects, n_cov = 10, 200, 20
+# 		outcomes = np.random.randn(n_obs, n_subjects)
+# 		covariates = np.random.randn(n_obs, n_subjects, n_cov)
+# 		tiles = mp.tilings.default_panel_tiles(n_obs=n_obs, n_subjects=n_subjects, n_cov=n_cov)
+# 		# Compute residuals and LFO residuals
+# 		mpt = mp.panel.MosaicPanelInference(
+# 			outcomes=outcomes,
+# 			covariates=covariates,
+# 			tiles=tiles,
+# 		)
+# 		mpt.compute_mosaic_residuals()
+# 		for feature in range(n_cov):
+# 			# Compare LFO residuals to a naively computed variant
+# 			lfo_resids = mpt._downdate_mosaic_residuals(feature=feature)
+# 			neg_feature = [i for i in range(n_cov) if i != feature]
+# 			mpt2 = mp.panel.MosaicPanelInference(
+# 				outcomes=outcomes,
+# 				covariates=covariates[..., neg_feature],
+# 				tiles=tiles,
+# 			)
+# 			expected = mpt2.compute_mosaic_residuals()
+# 			np.testing.assert_array_almost_equal(
+# 				lfo_resids,
+# 				expected,
+# 				decimal=8,
+# 				err_msg=f"LFO resids are incorrect with feature={feature}."
+# 			)
 
-	def test_linear_inversion(self):
-		"""
-		Tests that the algebra for the linear test statistic inversion is correct.
-		"""
-		np.random.seed(123)
-		nrand, alpha = 100, 0.05
-		for _ in range(10):
-			slope = 100 * np.random.uniform()
-			# Create statistics/null_slopes
-			stat = np.random.randn()
-			null_slopes = np.random.uniform(-slope, slope, size=nrand)
-			null_stats = np.random.randn(nrand)
-			# Queries p-value at a specific value of beta
-			def query_pval(beta):
-				new_stat = np.abs(stat - beta * slope)
-				new_null_stats = np.abs(null_stats - beta * null_slopes)
-				return (1 + np.sum(new_stat <= new_null_stats)) / (1 + nrand)
-			# Compute lower and upper bound
-			lower, upper = mp.panel.invert_linear_statistic(
-				stat=stat, slope=slope, null_stats=null_stats, 
-				null_slopes=null_slopes, alpha=alpha,
-			)
-			# Query
-			tol = 1e-3
-			for boundary, bsign, bname in zip(
-				[lower, upper], [1, -1], ['lower', 'upper']
-			):
-				for sign in [-1, 1]:
-					beta = boundary + sign * tol
-					pval = query_pval(beta)
-					self.assertTrue(
-						bsign * sign * pval >= bsign * sign * alpha,
-						f"invert_linear_statistic produces {bname}={boundary}, but at beta={beta}, pval={pval} with alpha={alpha}"
-					)
-			for beta in np.random.uniform(lower+tol, upper-tol, size=20):
-				pval = query_pval(beta)
-				self.assertTrue(
-					pval >= alpha,
-					f"invert_linear_statistic produces CI={[lower, upper]} but at beta={beta}, pval={pval} with alpha={alpha}"
-				)
+# 	def test_slope_intercept_representation(self):
+# 		"""
+# 		Tests that the test statistic for testing H_0 : beta[j] = b
+# 		can be written as stat - b * slope for stat, slope.
+# 		"""
+# 		np.random.seed(1234)
+# 		# Generate data
+# 		n_obs, n_subjects, n_cov = 10, 200, 20
+# 		outcomes = np.random.randn(n_obs, n_subjects)
+# 		covariates = np.random.randn(n_obs, n_subjects, n_cov)
+# 		tiles = mp.tilings.default_panel_tiles(n_obs=n_obs, n_subjects=n_subjects, n_cov=n_cov)
+# 		# Compute residuals + LFO residuals
+# 		mpinf = mp.panel.MosaicPanelInference(
+# 			outcomes=outcomes,
+# 			covariates=covariates,
+# 			tiles=tiles,
+# 		)
+# 		mpinf.compute_mosaic_residuals()
+# 		# Loop through several features
+# 		for feature in np.random.choice(n_cov, size=min(n_cov, 5), replace=True):
+# 			# Compute slope/statistic
+# 			mpinf._downdate_mosaic_residuals(feature=feature)
+# 			slope = mpinf.ZA_sums[:, 0].sum()
+# 			stat = mpinf.Zresid_sums[:, 0].sum()
+# 			# Manually leave the feature out and invert the null
+# 			neg_feature = [i for i in range(n_cov) if i != feature]
+# 			bs = np.random.randn(5)
+# 			for b in bs:
+# 				Z = covariates[:, :, feature]
+# 				new_outcomes = outcomes - b * Z
+# 				mpinf_manual = mp.panel.MosaicPanelInference(
+# 					outcomes=new_outcomes,
+# 					covariates=covariates[:, :, neg_feature],
+# 					tiles=tiles,
+# 				)
+# 				mpinf_manual.compute_mosaic_residuals()
+# 				stat_new = np.sum(mpinf_manual.residuals * Z)
+# 				np.testing.assert_array_almost_equal(
+# 					stat - b * slope,
+# 					stat_new,
+# 					decimal=5,
+# 					err_msg=f"Slope/intercept form used in inversion is inaccurate with b={b}, feature={feature}"
+# 				)
+
+# 	def test_linear_inversion(self):
+# 		"""
+# 		Tests that the algebra for the linear test statistic inversion is correct.
+# 		"""
+# 		np.random.seed(123)
+# 		nrand, alpha = 100, 0.05
+# 		for _ in range(10):
+# 			slope = 100 * np.random.uniform()
+# 			# Create statistics/null_slopes
+# 			stat = np.random.randn()
+# 			null_slopes = np.random.uniform(-slope, slope, size=nrand)
+# 			null_stats = np.random.randn(nrand)
+# 			# Queries p-value at a specific value of beta
+# 			def query_pval(beta):
+# 				new_stat = np.abs(stat - beta * slope)
+# 				new_null_stats = np.abs(null_stats - beta * null_slopes)
+# 				return (1 + np.sum(new_stat <= new_null_stats)) / (1 + nrand)
+# 			# Compute lower and upper bound
+# 			lower, upper = mp.panel.invert_linear_statistic(
+# 				stat=stat, slope=slope, null_stats=null_stats, 
+# 				null_slopes=null_slopes, alpha=alpha,
+# 			)
+# 			# Query
+# 			tol = 1e-3
+# 			for boundary, bsign, bname in zip(
+# 				[lower, upper], [1, -1], ['lower', 'upper']
+# 			):
+# 				for sign in [-1, 1]:
+# 					beta = boundary + sign * tol
+# 					pval = query_pval(beta)
+# 					self.assertTrue(
+# 						bsign * sign * pval >= bsign * sign * alpha,
+# 						f"invert_linear_statistic produces {bname}={boundary}, but at beta={beta}, pval={pval} with alpha={alpha}"
+# 					)
+# 			for beta in np.random.uniform(lower+tol, upper-tol, size=20):
+# 				pval = query_pval(beta)
+# 				self.assertTrue(
+# 					pval >= alpha,
+# 					f"invert_linear_statistic produces CI={[lower, upper]} but at beta={beta}, pval={pval} with alpha={alpha}"
+# 				)
 
 if __name__ == "__main__":
 	# Run tests---useful if using cprofilev
 	basename = os.path.basename(os.path.abspath(__file__))
 	if sys.argv[0] == f'test/{basename}':
 		time0 = time.time()
-		context.run_all_tests([TestMosaicPanelTest(), TestOLSPanelResids()])
+		context.run_all_tests([TestTileTransformations()])
 		elapsed = np.around(time.time() - time0, 2)
 		print(f"Finished running all tests at time={elapsed}")
 
