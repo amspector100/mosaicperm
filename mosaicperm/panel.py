@@ -5,6 +5,7 @@ from typing import Optional, Union
 from . import core, utilities, tilings
 import sklearn.linear_model as lm
 import scipy.sparse
+import itertools
 
 def _construct_swapinds(t):
 	"""
@@ -104,7 +105,7 @@ def ols_residuals_panel(
 ):	
 	"""
 	Computes residuals via OLS (NOT cross-sectional OLS).
-
+n
 	Parameters
 	----------
 	outcomes : np.array
@@ -180,6 +181,7 @@ class MosaicPanelTest(core.MosaicPermutationTest):
 		self.test_stat = test_stat
 		self.tstat_kwargs = dict() if tstat_kwargs is None else tstat_kwargs
 		# Create tiles: TODO different invariances for creating tiles in the future
+		ntiles = int(min(ntiles, len(np.unique(self.clusters))))
 		self.tile_ids = tilings.coarsify_partition(self.clusters, k=ntiles, random=False)
 		self.ntiles = len(np.unique(self.tile_ids))
 		self.tile_inds = [
@@ -260,24 +262,52 @@ class QuadraticMosaicPanelTest(MosaicPanelTest):
 			columns='subjects',
 			values='residuals'
 		)
-		cdf = pd.DataFrame(
-			np.stack([self.clusters, self.times, self.subjects], axis=1),
-			columns=['clusters', 'times', 'subjects']
+		tdf = pd.DataFrame(
+			np.stack([self.tile_ids, self.times, self.subjects], axis=1),
+			columns=['tiles', 'times', 'subjects']
 		).pivot(
 			index='times',
 			columns='subjects',
-			values='clusters'
+			values='tiles'
 		)
-		# Step 2: create aggregate cluster-specific residuals
+		# Step 2: create aggregate tile-specific residuals
 		weights = pd.Series(self.weights, index=np.sort(np.unique(self.subjects)))
 		acr = []
-		cluster_ids = np.unique(self.clusters)
-		for cluster in cluster_ids:
-			acr.append(
-				(rdf * weights * (cdf == cluster)).sum(axis=1)
-			)
-			acr.append(
-				(rdf * weights * (cdf == cluster)).sum(axis=1)
-			)
-		acr = pd.DataFrame(aggregate_cluster_resids, index=cluster_ids).T
-		# Step 3: Create correlations
+		acrtilde = []
+		tilenums = np.unique(self.tile_ids)
+		for tilenum in tilenums:
+			for l, df in zip([acr, acrtilde], [rdf, rtildedf]):
+				l.append((df * weights * (tdf == tilenum)).sum(axis=1))
+		acr = pd.DataFrame(acr, index=tilenums).T # T x ntiles
+		acrtilde = pd.DataFrame(acrtilde, index=tilenums).T
+		# Step 3: Create covariances
+		self.all_covs = np.stack(
+			[np.stack([acr.values.T @ acr.values, acr.values.T @ acrtilde.values], axis=0),
+			np.stack([acrtilde.values.T @ acr.values, acrtilde.values.T @ acrtilde.values], axis=0)],
+			axis=0
+		)
+		# get rid of diagonals
+		for z0, z1 in itertools.product([0, 1], [0,1]):
+			self.all_covs[z0, z1] -= np.diag(np.diag(self.all_covs[z0, z1]))
+		if self.method == 'abscov':
+			self.all_covs = np.abs(self.all_covs)
+		elif self.method in ['corr', 'abscorr']:
+			raise NotImplementedError("This is TODO.")
+
+		# Step 4: create p-value
+		self.statistic = np.mean(self.all_covs[0, 0])
+		self.null_statistics = np.zeros(nrand).reshape(-1, 1)
+		Z = np.random.binomial(1, 0.5, size=(nrand, len(tilenums)))
+		for r in utilities.vrange(nrand, verbose=verbose):
+			for z0, z1 in itertools.product([0,1], [0,1]):
+				self.null_statistics[r] += np.mean(self.all_covs[z0, z1] * np.outer(Z[r]==z0, Z[r]==z1).astype(float))
+		self.pval = (1+np.sum(self.statistic <= self.null_statistics)) / (nrand + 1)
+
+		# Compute approximate z-statistic
+		comb = np.concatenate([[self.statistic], self.null_statistics.flatten()])
+		# Handle when SD == 0
+		if comb.std() > 0:
+			self.apprx_zstat = (self.statistic - comb.mean()) / comb.std()
+		else:
+			self.apprx_zstat = 0
+		return self.pval

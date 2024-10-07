@@ -33,6 +33,26 @@ def mmc_stat(residuals, times, subjects, **kwargs):
 	# ).corr().values
 	return np.abs(corrs - np.eye(corrs.shape[0])).max(axis=0).mean()
 
+def quadratic_cov_stat(residuals, times, subjects, **kwargs):
+	"""
+	This uses a particular reshaping trick for efficiency.
+	It should not be used in general (use the commented out code instead).
+	"""
+	# rdf = pd.DataFrame(
+	# 	np.stack([residuals, times, subjects], axis=1),
+	# 	columns=['residuals', 'times', 'subjects']
+	# ).pivot(
+	# 	index='times',
+	# 	columns='subjects',
+	# 	values='residuals'
+	# )
+	# covs = rdf.values.T @ rdf.values
+	residuals = residuals.reshape(np.max(times) +1, np.max(subjects)+1, order='C')
+	covs = residuals.T @ residuals
+	return np.mean(covs - np.diag(np.diag(covs)))
+
+
+
 class TestTileTransformations(context.MosaicTest):
 
 	def test_transformations_automatic(self):
@@ -309,6 +329,38 @@ class TestMosaicPanelTest(context.MosaicTest):
 			print(f"Missing={missing_data}")
 			self.pearson_chi_square_test(counts, test_name='MosaicPanelTest p-values', alpha=0.001)
 
+	def test_quadratic_test(self):
+		nrand = 20000
+		data = mp.gen_data.gen_panel_data(n_obs=10, n_subjects=20, n_cov=2)
+		# Original variant
+		mpt = mp.panel.MosaicPanelTest(
+			outcomes=data['outcomes'],
+			times=data['times'],
+			subjects=data['subjects'],
+			clusters=data['subjects'],
+			cts_covariates=data['covariates'],
+			test_stat=quadratic_cov_stat,
+			tstat_kwargs=dict(times=data['times'], subjects=data['subjects']),
+			ntiles=20,
+		).fit(nrand=nrand)
+		qmpt = mp.panel.QuadraticMosaicPanelTest(
+			outcomes=data['outcomes'],
+			times=data['times'],
+			subjects=data['subjects'],
+			clusters=data['subjects'],
+			cts_covariates=data['covariates'],
+			method='cov',
+			ntiles=20,
+		).fit(nrand=nrand)
+		for mpt_val, qmpt_val, name, decimal in zip(
+			[mpt.statistic, mpt.pval], [qmpt.statistic, qmpt.pval], ['statistic', 'pval'], [8, 2],
+		):
+			np.testing.assert_array_almost_equal(
+				mpt_val,
+				qmpt_val,
+				decimal=decimal,
+				err_msg=f"QuadraticMosaicPanelTest {name} does not match a manual implementation."
+			)
 
 # class TestMosaicPanelInference(context.MosaicTest):
 
