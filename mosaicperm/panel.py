@@ -212,12 +212,72 @@ class MosaicPanelTest(core.MosaicPermutationTest):
 			)
 		self._rtilde = self.residuals.copy()
 
-	def permute_residuals(self):
+	def permute_residuals(self, _permute_all=False):
+		# Note: _permute_all is an internal flag which does all the flips
 		# uniforms
 		U = np.random.uniform(size=len(self.tile_inds))
 		# Loop through and possibly permute
 		for tile_id, inds in enumerate(self.tile_inds):
-			if U[tile_id] <= 0.5:
+			if U[tile_id] <= 0.5 or _permute_all:
 				self._rtilde[inds] = self.tile_transforms[tile_id](self.residuals[inds])
 			else:
 				self._rtilde[inds] = self.residuals[inds]
+
+class QuadraticMosaicPanelTest(MosaicPanelTest):
+	"""
+	Parameters
+	----------
+	method : str
+		One of 'cov', 'abscov', 'corr', 'abscorr'
+	weights : np.array
+		n_subjects-shaped array mapping a subject
+		to its weight (which may be negative).
+	"""
+	def __init__(self, *args, method: str='cov', weights: Optional[np.array]=None, **kwargs):
+		super().__init__(*args, **kwargs, test_stat=None)
+		self.method = method
+		self.weights = weights
+		if self.weights is None:
+			self.weights = np.ones(len(np.unique(self.subjects)))
+
+	def _compute_p_value(self, nrand: int, verbose: bool) -> float:
+		### Preprocessing
+		self.permute_residuals(_permute_all=True)
+		# Step 1: pivots
+		rdf = pd.DataFrame(
+			np.stack([self.residuals, self.times, self.subjects], axis=1),
+			columns=['residuals', 'times', 'subjects']
+		).pivot(
+			index='times',
+			columns='subjects',
+			values='residuals'
+		)
+		rtildedf = pd.DataFrame(
+			np.stack([self._rtilde, self.times, self.subjects], axis=1),
+			columns=['residuals', 'times', 'subjects']
+		).pivot(
+			index='times',
+			columns='subjects',
+			values='residuals'
+		)
+		cdf = pd.DataFrame(
+			np.stack([self.clusters, self.times, self.subjects], axis=1),
+			columns=['clusters', 'times', 'subjects']
+		).pivot(
+			index='times',
+			columns='subjects',
+			values='clusters'
+		)
+		# Step 2: create aggregate cluster-specific residuals
+		weights = pd.Series(self.weights, index=np.sort(np.unique(self.subjects)))
+		acr = []
+		cluster_ids = np.unique(self.clusters)
+		for cluster in cluster_ids:
+			acr.append(
+				(rdf * weights * (cdf == cluster)).sum(axis=1)
+			)
+			acr.append(
+				(rdf * weights * (cdf == cluster)).sum(axis=1)
+			)
+		acr = pd.DataFrame(aggregate_cluster_resids, index=cluster_ids).T
+		# Step 3: Create correlations
