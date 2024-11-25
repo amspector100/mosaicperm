@@ -122,11 +122,12 @@ n
 	# Case 1: dense.
 	if isinstance(covariates, np.ndarray):
 		# Flatten for QR decomposition
-		A = np.linalg.pinv(covariates.T @ covariates)
-		hatbeta = A @ covariates.T @ outcomes
+		hatbeta = np.linalg.lstsq(a=covariates, b=outcomes, rcond=None)[0]
+		#A = np.linalg.pinv(covariates.T @ covariates)
+		#hatbeta = A @ covariates.T @ outcomes
 		resid = outcomes - covariates @ hatbeta
 	# Case 2: sparse
-	elif isinstance(covariates, sparse.COO):
+	elif isinstance(covariates, scipy.sparse.csr_matrix):
 		ols = lm.LinearRegression(fit_intercept=False)
 		ols.fit(y=outcomes, X=covariates)
 		resid = outcomes - ols.predict(covariates)
@@ -140,6 +141,12 @@ def _convert_pd_to_numpy(x):
 class MosaicPanelTest(core.MosaicPermutationTest):
 	"""
 	Note to self: this is an extension that should go in the appendix IMO.
+	
+	Parameters
+	----------
+	tile_ids : np.array
+		n-length array. tile_ids[i] = k implies that observation
+		i is in tile k.
 	"""
 	def __init__(
 		self,
@@ -148,7 +155,7 @@ class MosaicPanelTest(core.MosaicPermutationTest):
 		subjects: Union[np.array, pd.Series],
 		times: Union[np.array, pd.Series],
 		# Optional inputs
-		clusters: Optional[Union[np.array, pd.Series]]=None,
+		clusters: Optional[Union[np.array, pd.Series, scipy.sparse.csr_matrix]]=None,
 		cts_covariates: Optional[Union[pd.DataFrame, np.array]]=None,
 		discrete_covariates: Optional[pd.DataFrame]=None,
 		# tstat kwargs
@@ -156,6 +163,7 @@ class MosaicPanelTest(core.MosaicPermutationTest):
 		# tile / permutation kwargs
 		invariance='local_exch',
 		ntiles: int=10,
+		tile_ids: Optional[np.array]=None,
 	):
 		# Outcomes, subjects, times, and clusters
 		self.outcomes = _convert_pd_to_numpy(outcomes)
@@ -181,11 +189,14 @@ class MosaicPanelTest(core.MosaicPermutationTest):
 		self.test_stat = test_stat
 		self.tstat_kwargs = dict() if tstat_kwargs is None else tstat_kwargs
 		# Create tiles: TODO different invariances for creating tiles in the future
-		ntiles = int(min(ntiles, len(np.unique(self.clusters))))
-		self.tile_ids = tilings.coarsify_partition(self.clusters, k=ntiles, random=False)
+		if tile_ids is None:
+			ntiles = int(min(ntiles, len(np.unique(self.clusters))))
+			self.tile_ids = tilings.coarsify_partition(self.clusters, k=ntiles, random=False)
+		else:
+			self.tile_ids = tile_ids
 		self.ntiles = len(np.unique(self.tile_ids))
 		self.tile_inds = [
-			np.where(self.tile_ids == tile_id)[0] for tile_id in range(ntiles)
+			np.where(self.tile_ids == tile_id)[0] for tile_id in range(self.ntiles)
 		]
 		# Create tile transformations
 		self.invariance = invariance
@@ -195,7 +206,7 @@ class MosaicPanelTest(core.MosaicPermutationTest):
 				times=self.times[self.tile_inds[tile_id]],
 				covariates=self.covariates[self.tile_inds[tile_id]],
 				invariance=self.invariance,
-			) for tile_id in range(ntiles)
+			) for tile_id in range(self.ntiles)
 		]
 
 	def compute_mosaic_residuals(self):
@@ -231,7 +242,7 @@ class QuadraticMosaicPanelTest(MosaicPanelTest):
 	----------
 	method : str
 		One of 'cov', 'abscov', 'corr', 'abscorr'
-	weights : np.array
+	weights : pd.Series
 		n_subjects-shaped array mapping a subject
 		to its weight (which may be negative).
 	"""
@@ -254,6 +265,7 @@ class QuadraticMosaicPanelTest(MosaicPanelTest):
 			columns='subjects',
 			values='residuals'
 		)
+		self.rdf = rdf
 		rtildedf = pd.DataFrame(
 			np.stack([self._rtilde, self.times, self.subjects], axis=1),
 			columns=['residuals', 'times', 'subjects']
@@ -270,29 +282,39 @@ class QuadraticMosaicPanelTest(MosaicPanelTest):
 			columns='subjects',
 			values='tiles'
 		)
+		self.tdf = tdf
 		# Step 2: create aggregate tile-specific residuals
 		weights = pd.Series(self.weights, index=np.sort(np.unique(self.subjects)))
 		acr = []
 		acrtilde = []
-		tilenums = np.unique(self.tile_ids)
+		tilenums = np.unique(self.tile_ids); ntiles = len(tilenums)
 		for tilenum in tilenums:
 			for l, df in zip([acr, acrtilde], [rdf, rtildedf]):
 				l.append((df * weights * (tdf == tilenum)).sum(axis=1))
 		acr = pd.DataFrame(acr, index=tilenums).T # T x ntiles
 		acrtilde = pd.DataFrame(acrtilde, index=tilenums).T
+		self.acr = acr
+		self.acrtilde = acrtilde
 		# Step 3: Create covariances
-		self.all_covs = np.stack(
-			[np.stack([acr.values.T @ acr.values, acr.values.T @ acrtilde.values], axis=0),
-			np.stack([acrtilde.values.T @ acr.values, acrtilde.values.T @ acrtilde.values], axis=0)],
-			axis=0
-		)
+		self.all_covs = np.zeros((2, 2, ntiles, ntiles))
+		if self.method in ['cov', 'abscov']:
+			self.all_covs = np.stack(
+				[np.stack([acr.values.T @ acr.values, acr.values.T @ acrtilde.values], axis=0),
+				np.stack([acrtilde.values.T @ acr.values, acrtilde.values.T @ acrtilde.values], axis=0)],
+				axis=0
+			)
+		elif self.method in ['corr', 'abscorr']:
+			for z0, acr1 in zip([0, 1], [acr.values, acrtilde.values]):
+				for z1, acr2 in zip([0, 1], [acr.values, acrtilde.values]):
+					self.all_covs[z0, z1] = np.corrcoef(
+						acr1.T, acr2.T
+					)[0:ntiles][:, ntiles]
+		if self.method in ['abscov', 'abscorr']:
+			self.all_covs = np.abs(self.all_covs)
+
 		# get rid of diagonals
 		for z0, z1 in itertools.product([0, 1], [0,1]):
 			self.all_covs[z0, z1] -= np.diag(np.diag(self.all_covs[z0, z1]))
-		if self.method == 'abscov':
-			self.all_covs = np.abs(self.all_covs)
-		elif self.method in ['corr', 'abscorr']:
-			raise NotImplementedError("This is TODO.")
 
 		# Step 4: create p-value
 		self.statistic = np.mean(self.all_covs[0, 0])
@@ -311,3 +333,349 @@ class QuadraticMosaicPanelTest(MosaicPanelTest):
 		else:
 			self.apprx_zstat = 0
 		return self.pval
+
+def _precompute_lfo_qr(X, transform, lmda=1e-8):
+	"""
+	Computes QR of augmented design with regularization to ensure
+	numerical stability for low-rank designs.
+	"""
+	# Normalize
+	Xaug = np.concatenate([X, transform(X)], axis=1)
+	ses = Xaug.std(axis=0)
+	ses[ses == 0] = 1
+	Xaug = Xaug / ses
+	# Add
+	Xaug = np.concatenate([Xaug, lmda * np.eye(Xaug.shape[1])], axis=0)
+	# QR
+	return np.linalg.qr(Xaug)
+
+def _compute_lfo_resid(
+	fullQ: np.array,
+	fullR: np.array,
+	outcomes: np.array,
+	feature: int,
+	n_cov: int,
+	Z: Optional[np.array]=None
+):
+	"""
+	Uses precomputed Q, R of full design to compute leave-feature-out
+	residuals.
+
+	Parameters
+	----------
+	fullQ : np.array
+		(n + 2*n_cov) x (2* n_cov) Q from QR decomp of full augmented matrix.
+	fullR : np.array
+		(2*n_cov x 2*n_cov) R from QR decomp of full augmented matrix
+	outcomes : np.array
+		array of outcomes
+	feature : int
+		Integer between 0 and n_cov - 1 specifying which feature is of interest.
+	n_cov : int
+		Number of covariates
+	Z : np.array
+		n-length array of values taken by feature of interest, optional.
+
+	Returns
+	-------
+	resid : np.array
+		Residuals of ``outcomes" after projecting out the augmented design matrix
+		without the ``feature``.
+	Zresid : np.array
+		Residuals of ``Z``, assuming ``Z`` is provided.
+	"""
+	# Update
+	Q = fullQ.copy()
+	R = fullR.copy()
+	for k in [feature + n_cov, feature]:
+		Q, R = scipy.linalg.qr_delete(Q, R, k=k, p=1, which='col', check_finite=True)
+	# Get rid of last 2*n_cov rows of Q which are for numerical stability
+	Qsub = Q[0:len(outcomes)]
+	resid =  outcomes - Qsub @ (Qsub.T @ outcomes)
+	if Z is None:
+		return resid
+	else:
+		Zresid = Z - Qsub @ (Qsub.T @ Z)
+		return resid, Zresid
+
+
+class MosaicPanelInference(MosaicPanelTest):
+	"""
+	Produces confidence interval for linear models in panel data.
+	"""
+	def __init__(self, *args, **kwargs):
+		super().__init__(*args, **kwargs, test_stat=None)
+
+	def compute_mosaic_residuals(self, verbose: bool=True):
+		"""
+		Computes full mosaic residuals and precomputes useful quantities.
+		"""
+		if isinstance(self.covariates, np.ndarray):
+			# Loop through tiles
+			self.residuals = np.zeros(self.n)
+			self._tile_QRs = dict() # maps tile_num --> (Q, R) of augmented, regularized design
+			for tile_id in utilities.vrange(len(self.tile_inds), verbose=verbose):
+				inds = self.tile_inds[tile_id]
+				# Compute Q, R decomp of augmented design
+				Q, R = _precompute_lfo_qr(self.covariates[inds], transform=self.tile_transforms[tile_id])
+				self._tile_QRs[tile_id] = Q, R
+				# Compute final residuals
+				Qsub = Q[0:len(inds)]
+				self.residuals[inds] = self.outcomes[inds] - Qsub @ (Qsub.T @ self.outcomes[inds])
+			# Initialize rtilde correctly
+			self._rtilde = self.residuals.copy()
+			return self.residuals
+		else:
+			super().compute_mosaic_residuals()
+
+	def _downdate_mosaic_residuals(self, feature: int) -> np.array:
+		"""
+		Efficiently computes mosaic residuals leaving 
+		out feature j.
+
+		Parameters
+		----------
+		feature : int
+			Integer in {0, ..., n_cov - 1}.
+
+		Returns
+		-------
+		lfo_resids : np.array
+			Resids leaving out ``feature``
+
+		Notes
+		-----
+		Also projects out the influence of the other covariates on
+		``self.covariates[:, :, feature]`` and stores the result in
+		``self.orthog_feature``.
+		"""
+		# Stores "leave feature out" residuals
+		self.lfo_resids = np.zeros(self.residuals.shape)
+		# Stores the feature
+		self.orthog_feature = np.zeros(self.residuals.shape)
+		# If Z is the feature and A is the orthogonalized feature, 
+		# stores np.sum(Z * A) and np.sum(Z * transform(A)), etc.
+		self.Zresid_sums = np.zeros((self.ntiles, 2))
+		self.ZA_sums = np.zeros((self.ntiles, 2))
+		for tile_id, inds in enumerate(self.tile_inds):
+			Z = self.covariates[inds, feature]
+			transform = self.tile_transforms[tile_id]
+			# In the non-sparse case, use efficient leave-one-out updates
+			if isinstance(self.covariates, np.ndarray):
+				# Downdate QR and obtain residuals
+				fullQ, fullR = self._tile_QRs[tile_id]
+				resid, A = _compute_lfo_resid(
+					fullQ=fullQ, 
+					fullR=fullR, 
+					outcomes=self.outcomes[inds], 
+					feature=feature, 
+					n_cov=self.n_cov,
+					Z=Z
+				)
+			# In the sparse case, just redo each regression
+			else:
+				Z = Z.toarray().flatten()
+				neg_feature = np.array([j for j in range(self.n_cov) if j != feature]).astype(int)
+				# augmented covariates
+				Xtile = self.covariates[inds][:, neg_feature]
+				aug_cov = scipy.sparse.hstack([Xtile, transform(Xtile)])
+				# residuals
+				resid = ols_residuals_panel(
+					outcomes=self.outcomes[inds],
+					covariates=aug_cov,
+				)
+				A = ols_residuals_panel(
+					outcomes=Z,
+					covariates=aug_cov,
+				)
+			# Save
+			self.lfo_resids[inds] = resid
+			self.orthog_feature[inds] = A
+			# Precompute sums used to compute slopes/intercepts within tiles
+			# Note that A @ resid = Z @ resid and Z @ A = A @ A
+			# and using A instead of Z is slightly more stable
+			self.Zresid_sums[tile_id, 0] = np.sum(A * resid)
+			self.Zresid_sums[tile_id, 1] = np.sum(A * transform(resid))
+			self.ZA_sums[tile_id, 0] = np.sum(A * A)
+			self.ZA_sums[tile_id, 1] = np.sum(A * transform(A))
+		# return
+		return self.lfo_resids
+
+
+	def _precompute_confidence_intervals(
+		self, 
+		nrand: int,
+		features: Optional[np.array]=None,
+		verbose: bool=True,
+	):
+		"""
+		Computes underlying confidence intervals for :meth:`fit`.
+
+		Parameters
+		----------
+		alpha : int
+			Desired nominal Type I error rate.
+		nrand : int
+			Number of randomizations.
+		features : np.array
+			The list of features to compute CIs for. 
+			Defaults to all features.
+		verbose : bool
+			If True, show progress bars.
+		"""
+		# process features
+		if features is None:
+			features = np.arange(self.n_cov).astype(int)
+		if not utilities.haslength(features):
+			features = np.array([features]).astype(int)
+		self.features = features
+
+		# Save
+		self.estimates = np.zeros(self.n_cov); self.estimates[:] = np.nan
+		self.ses = self.estimates.copy()
+		self.lcis = self.ses.copy()
+		self.ucis = self.ses.copy()
+		self.pvals = self.ses.copy()
+
+		# Save the slopes and statistics
+		self._stats = np.zeros(self.n_cov); self._stats[:] = np.nan
+		self._slopes = self._stats.copy()
+		# save null slopes/statistics
+		self._null_stats = np.zeros((self.n_cov, nrand))
+		self._null_stats[:] = np.nan
+		self._null_slopes = self._null_stats.copy()
+
+		# Loop through and compute
+		xinds = np.stack([np.arange(self.ntiles) for _ in range(nrand)])
+		for j in utilities.vrange(len(features), verbose=verbose):
+			feature = features[j]
+			self._downdate_mosaic_residuals(feature=feature)
+			## Todo: is this a bottleneck? If so, it is valid to move it outside the for loop
+			flips = np.random.binomial(1, 0.5, size=(nrand, self.ntiles)).astype(int)
+			# Observe test statistic + slope as beta changes
+			stat = self.Zresid_sums[:, 0].sum()
+			slope = self.ZA_sums[:, 0].sum()
+			# Compute null test statistics + slopes as beta changes
+			null_stats = self.Zresid_sums[(xinds, flips)].sum(axis=1)
+			null_slopes = self.ZA_sums[(xinds, flips)].sum(axis=1)
+			# Save
+			self._null_stats[j] = null_stats
+			self._null_slopes[j] = null_slopes
+			self._stats[j] = stat
+			self._slopes[j] = slope
+			# Compute p-value
+			self.pvals[j] = (1 + np.sum(np.abs(stat) <= np.abs(null_stats))) / (1 + nrand)
+			# # Estimate
+			self.estimates[j] = stat / slope
+			# # null estimators under the null where beta_j = estimate
+			null_estimates = (null_stats - self.estimates[j] * null_slopes) / slope
+			self.ses[j] = np.std(null_estimates)
+
+	def compute_cis(self, alpha=0.05):
+		for j in self.features:
+			self.lcis[j], self.ucis[j] = invert_linear_statistic(
+				stat=self._stats[j],
+				slope=self._slopes[j],
+				null_stats=self._null_stats[j],
+				null_slopes=self._null_slopes[j],
+				alpha=alpha
+			)
+		# To save the confidence intervals
+		columns = ['Estimate', 'SE', 'Lower', 'Upper', 'p-value']
+		self._summary = pd.DataFrame(
+			np.stack(
+				[self.estimates, self.ses, self.lcis, self.ucis, self.pvals], axis=1
+			),
+			index=np.arange(self.n_cov),
+			columns=columns,
+		)
+		self._summary = self._summary.loc[self._summary['Estimate'].notnull()]
+
+
+	def fit(
+		self,
+		nrand: int=10000,
+		alpha: int=0.05,
+		features: Optional[np.array]=None,
+		verbose: bool=True,
+	):
+		"""
+		Fits the linear model and returns confidence intervals.
+
+		Parameters
+		----------
+		alpha : int
+			Desired nominal Type I error rate.
+		nrand : int
+			Number of randomizations.
+		features : np.array
+			The list of features to compute CIs for. 
+			Defaults to all features.
+		verbose : bool
+			If True, show progress bars.
+
+		Returns
+		-------
+		self : object
+		"""
+		if verbose:
+			print("Computing mosaic residuals.")
+		#self.compute_mosaic_residuals(verbose=verbose)
+		self.compute_mosaic_residuals(verbose=verbose)
+		if verbose:
+			print("Precomputing confidence intervals.")
+		self._precompute_confidence_intervals(
+			nrand=nrand, features=features, verbose=verbose
+		)
+		self.compute_cis(alpha=alpha)
+		return self
+
+	@property
+	def summary(self):
+		"""
+		Produces a summary of key inferential results.
+		"""
+		return self._summary
+
+### Confidence intervals
+def invert_linear_statistic(
+	stat: float, 
+	slope: float,
+	null_stats: np.array,
+	null_slopes: np.array,
+	alpha: float,
+	tol: float=1e-8
+):
+	"""
+	Finds the set of beta such that
+	
+	|stat - beta slope| >= Q_{alpha}(|null_stats - beta * null_slopes|)
+	
+	under the assumption that |null_slopes| <= |slope|.
+	"""
+	nrand = len(null_stats)
+	if slope <= 0:
+		raise ValueError(f"slope={slope} <= 0")
+	# Adjust absolute values to account for precision errors
+	to_adjust = np.abs(null_slopes) > slope
+	null_slopes[to_adjust] = slope * np.sign(null_slopes[to_adjust])
+	# Equi-tailed threshold
+	rthresh = int(np.floor(alpha * (nrand + 1))) - 1
+	if rthresh < 0:
+		return -np.inf, np.inf
+	# First set of inflections
+	inflections0 = np.zeros(nrand) - np.inf
+	denoms0 = slope - null_slopes
+	flags0 = denoms0 != 0
+	inflections0[flags0] = (stat - null_stats)[flags0] / denoms0[flags0]
+	# Second set of inflections
+	inflections1 = np.zeros(nrand) + np.inf
+	denoms1 = slope + null_slopes
+	flags1 = denoms1 != 0
+	inflections1[flags1] = (stat + null_stats)[flags1] / denoms1[flags1]
+	# Combine and sort
+	inflections = np.sort(np.stack([inflections0, inflections1], axis=1), axis=1)
+	# Confidence bounds
+	lci = np.sort(inflections[:, 0])[rthresh]
+	uci = np.sort(inflections[:, 1])[-(rthresh+1)]
+	return lci, uci

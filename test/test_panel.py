@@ -362,155 +362,183 @@ class TestMosaicPanelTest(context.MosaicTest):
 				err_msg=f"QuadraticMosaicPanelTest {name} does not match a manual implementation."
 			)
 
-# class TestMosaicPanelInference(context.MosaicTest):
+class TestMosaicPanelInference(context.MosaicTest):
 
-# 	def test_residual_orthogonality(self):
-# 		n_obs, n_subjects, n_cov = 15, 200, 20
-# 		# Create outcomes and covariates
-# 		outcomes = np.random.randn(n_obs, n_subjects)
-# 		covariates = np.random.randn(n_obs, n_subjects, n_cov)
-# 		# Construct residuals
-# 		mpi = mp.panel.MosaicPanelInference(outcomes, covariates=covariates)
-# 		mpi.compute_mosaic_residuals()
-# 		for (batch, group) in mpi.tiles:
-# 			tile_cov = covariates[np.ix_(batch, group)].reshape(-1, n_cov, order='C')
-# 			tile_resids = mpi.residuals[np.ix_(batch, group)].flatten(order='C')
-# 			# Test orthogonality
-# 			np.testing.assert_array_almost_equal(
-# 				tile_cov.T @ tile_resids,
-# 				np.zeros(n_cov),
-# 				decimal=5,
-# 				err_msg=f"MPI residuals for batch={batch}, group={group} are not orthogonal to covariates."
-# 			)
-# 			# Test that the right covariates are lined up with the right outcomes
-# 			for k in range(len(tile_resids)):
-# 				i, j = np.where(mpi.residuals == tile_resids[k])
-# 				i = i.item(); j = j.item()
-# 				np.testing.assert_array_almost_equal(
-# 					covariates[i, j],
-# 					tile_cov[k],
-# 					decimal=5,
-# 					err_msg=f"After reshaping, covariates are not aligned with outcomes"
-# 				)
+	def test_residual_orthogonality(self):
+		n_cov = 5
+		data = mp.gen_data.gen_panel_data(n_obs=50, n_subjects=20, n_cov=n_cov)
+		for storage_type, covariates in zip(
+			['dense', 'sparse'],
+			[data['covariates'], scipy.sparse.csr_matrix(data['covariates'])],
+		):
+			# Construct original residuals
+			mpi = mp.panel.MosaicPanelInference(
+				outcomes=data['outcomes'],
+				times=data['times'],
+				subjects=data['subjects'],
+				clusters=data['subjects'],
+				cts_covariates=covariates,
+			)
+			mpi.compute_mosaic_residuals()
+			for (tile_id, tile_inds) in enumerate(mpi.tile_inds):
+				tile_cov = data['covariates'][tile_inds]
+				tile_resids = mpi.residuals[tile_inds]
+				# Test orthogonality
+				np.testing.assert_array_almost_equal(
+					tile_cov.T @ tile_resids,
+					np.zeros(n_cov),
+					decimal=5 if storage_type == 'dense' else 4,
+					err_msg=f"MPI residuals for tile={tile_id} are not orthogonal to covariates with storage_type={storage_type}."
+				)
+			# Test residual orthogonality
+			for feature in range(n_cov):
+				# Compare LFO residuals to a naively computed variant
+				lfo_resids = mpi._downdate_mosaic_residuals(feature=feature)
+				neg_feature = [i for i in range(n_cov) if i != feature]
+				mpi2 = mp.panel.MosaicPanelInference(
+					outcomes=data['outcomes'],
+					times=data['times'],
+					subjects=data['subjects'],
+					clusters=data['subjects'],
+					cts_covariates=data['covariates'][..., neg_feature],
+					tile_ids=mpi.tile_ids,
+				)
+				expected = mpi2.compute_mosaic_residuals()
+				np.testing.assert_array_almost_equal(
+					lfo_resids,
+					expected,
+					decimal=8 if storage_type == 'dense' else 4,
+					err_msg=f"LFO resids are incorrect with feature={feature} and storage_type={storage_type}."
+				)
 
-# 	def test_lfo_residuals(self):
-# 		"""
-# 		Check that LFO residuals are correct
-# 		"""
-# 		np.random.seed(1234)
-# 		# Generate data
-# 		n_obs, n_subjects, n_cov = 10, 200, 20
-# 		outcomes = np.random.randn(n_obs, n_subjects)
-# 		covariates = np.random.randn(n_obs, n_subjects, n_cov)
-# 		tiles = mp.tilings.default_panel_tiles(n_obs=n_obs, n_subjects=n_subjects, n_cov=n_cov)
-# 		# Compute residuals and LFO residuals
-# 		mpt = mp.panel.MosaicPanelInference(
-# 			outcomes=outcomes,
-# 			covariates=covariates,
-# 			tiles=tiles,
-# 		)
-# 		mpt.compute_mosaic_residuals()
-# 		for feature in range(n_cov):
-# 			# Compare LFO residuals to a naively computed variant
-# 			lfo_resids = mpt._downdate_mosaic_residuals(feature=feature)
-# 			neg_feature = [i for i in range(n_cov) if i != feature]
-# 			mpt2 = mp.panel.MosaicPanelInference(
-# 				outcomes=outcomes,
-# 				covariates=covariates[..., neg_feature],
-# 				tiles=tiles,
-# 			)
-# 			expected = mpt2.compute_mosaic_residuals()
-# 			np.testing.assert_array_almost_equal(
-# 				lfo_resids,
-# 				expected,
-# 				decimal=8,
-# 				err_msg=f"LFO resids are incorrect with feature={feature}."
-# 			)
+	def test_equivariance(self):
+		"""
+		Tests that modifying y = y + b * X[:, 0]
+		increases the estimate by b and does not change
+		the standard error.
+		"""
+		# Generate data
+		np.random.seed(123)
+		nrand, alpha = 10000, 0.05
+		features = [0,1]
+		data = mp.gen_data.gen_panel_data(flat=True, n_obs=100, n_subjects=50, n_cov=10)
+		# Fit original
+		np.random.seed(123)
+		mpt = mp.panel.MosaicPanelInference(
+			outcomes=data['outcomes'],
+			times=data['times'],
+			subjects=data['subjects'],
+			cts_covariates=data['covariates'],
+			ntiles=10
+		).fit(nrand=nrand, alpha=alpha, features=features)
+		# Fit shifted
+		b = np.random.randn()
+		np.random.seed(123)
+		mpt2 = mp.panel.MosaicPanelInference(
+			outcomes=data['outcomes'] + b * data['covariates'][:, 0],
+			times=data['times'],
+			subjects=data['subjects'],
+			cts_covariates=data['covariates'],
+			tile_ids=mpt.tile_ids
+		).fit(nrand=nrand, alpha=alpha, features=features)
+		# Test estimates and SES
+		for objtype in ['Estimate', 'Lower', 'Upper', 'SE']:
+			for feature in features:
+				obj1 = mpt.summary[objtype][feature]
+				obj2 = mpt2.summary[objtype][feature]
+				expected_diff = b if (feature == 0 and objtype != 'SE') else 0
+				np.testing.assert_array_almost_equal(
+					obj1,
+					obj2 - expected_diff,
+					decimal=5,
+					err_msg=f"After replacing y with y + b * X[:, 0], {objtype} changes from {obj1} to {obj2} with b={b}"
+				)
 
-# 	def test_slope_intercept_representation(self):
-# 		"""
-# 		Tests that the test statistic for testing H_0 : beta[j] = b
-# 		can be written as stat - b * slope for stat, slope.
-# 		"""
-# 		np.random.seed(1234)
-# 		# Generate data
-# 		n_obs, n_subjects, n_cov = 10, 200, 20
-# 		outcomes = np.random.randn(n_obs, n_subjects)
-# 		covariates = np.random.randn(n_obs, n_subjects, n_cov)
-# 		tiles = mp.tilings.default_panel_tiles(n_obs=n_obs, n_subjects=n_subjects, n_cov=n_cov)
-# 		# Compute residuals + LFO residuals
-# 		mpinf = mp.panel.MosaicPanelInference(
-# 			outcomes=outcomes,
-# 			covariates=covariates,
-# 			tiles=tiles,
-# 		)
-# 		mpinf.compute_mosaic_residuals()
-# 		# Loop through several features
-# 		for feature in np.random.choice(n_cov, size=min(n_cov, 5), replace=True):
-# 			# Compute slope/statistic
-# 			mpinf._downdate_mosaic_residuals(feature=feature)
-# 			slope = mpinf.ZA_sums[:, 0].sum()
-# 			stat = mpinf.Zresid_sums[:, 0].sum()
-# 			# Manually leave the feature out and invert the null
-# 			neg_feature = [i for i in range(n_cov) if i != feature]
-# 			bs = np.random.randn(5)
-# 			for b in bs:
-# 				Z = covariates[:, :, feature]
-# 				new_outcomes = outcomes - b * Z
-# 				mpinf_manual = mp.panel.MosaicPanelInference(
-# 					outcomes=new_outcomes,
-# 					covariates=covariates[:, :, neg_feature],
-# 					tiles=tiles,
-# 				)
-# 				mpinf_manual.compute_mosaic_residuals()
-# 				stat_new = np.sum(mpinf_manual.residuals * Z)
-# 				np.testing.assert_array_almost_equal(
-# 					stat - b * slope,
-# 					stat_new,
-# 					decimal=5,
-# 					err_msg=f"Slope/intercept form used in inversion is inaccurate with b={b}, feature={feature}"
-# 				)
 
-# 	def test_linear_inversion(self):
-# 		"""
-# 		Tests that the algebra for the linear test statistic inversion is correct.
-# 		"""
-# 		np.random.seed(123)
-# 		nrand, alpha = 100, 0.05
-# 		for _ in range(10):
-# 			slope = 100 * np.random.uniform()
-# 			# Create statistics/null_slopes
-# 			stat = np.random.randn()
-# 			null_slopes = np.random.uniform(-slope, slope, size=nrand)
-# 			null_stats = np.random.randn(nrand)
-# 			# Queries p-value at a specific value of beta
-# 			def query_pval(beta):
-# 				new_stat = np.abs(stat - beta * slope)
-# 				new_null_stats = np.abs(null_stats - beta * null_slopes)
-# 				return (1 + np.sum(new_stat <= new_null_stats)) / (1 + nrand)
-# 			# Compute lower and upper bound
-# 			lower, upper = mp.panel.invert_linear_statistic(
-# 				stat=stat, slope=slope, null_stats=null_stats, 
-# 				null_slopes=null_slopes, alpha=alpha,
-# 			)
-# 			# Query
-# 			tol = 1e-3
-# 			for boundary, bsign, bname in zip(
-# 				[lower, upper], [1, -1], ['lower', 'upper']
-# 			):
-# 				for sign in [-1, 1]:
-# 					beta = boundary + sign * tol
-# 					pval = query_pval(beta)
-# 					self.assertTrue(
-# 						bsign * sign * pval >= bsign * sign * alpha,
-# 						f"invert_linear_statistic produces {bname}={boundary}, but at beta={beta}, pval={pval} with alpha={alpha}"
-# 					)
-# 			for beta in np.random.uniform(lower+tol, upper-tol, size=20):
-# 				pval = query_pval(beta)
-# 				self.assertTrue(
-# 					pval >= alpha,
-# 					f"invert_linear_statistic produces CI={[lower, upper]} but at beta={beta}, pval={pval} with alpha={alpha}"
-# 				)
+	def test_slope_intercept_representation(self):
+		"""
+		Tests that the test statistic for testing H_0 : beta[j] = b
+		can be written as stat - b * slope for stat, slope.
+		"""
+		np.random.seed(1234)
+		# Generate data
+		n_cov = 5
+		data = mp.gen_data.gen_panel_data(n_obs=50, n_subjects=20, n_cov=n_cov)
+		mpinf_args = dict(times=data['times'], subjects=data['subjects'], clusters=data['subjects'])
+		# Compute residuals + LFO residuals
+		mpinf = mp.panel.MosaicPanelInference(
+			outcomes=data['outcomes'],
+			cts_covariates=data['covariates'],
+			**mpinf_args,
+		)
+		mpinf.compute_mosaic_residuals()
+		# Loop through several features
+		for feature in np.random.choice(n_cov, size=min(n_cov, 5), replace=True):
+			# Compute slope/statistic
+			mpinf._downdate_mosaic_residuals(feature=feature)
+			slope = mpinf.ZA_sums[:, 0].sum()
+			stat = mpinf.Zresid_sums[:, 0].sum()
+			# Manually leave the feature out and invert the null
+			neg_feature = [i for i in range(n_cov) if i != feature]
+			bs = np.random.randn(5)
+			for b in bs:
+				Z = data['covariates'][..., feature]
+				new_outcomes = data['outcomes'] - b * Z
+				mpinf_manual = mp.panel.MosaicPanelInference(
+					outcomes=new_outcomes,
+					cts_covariates=data['covariates'][..., neg_feature],
+					tile_ids=mpinf.tile_ids,
+					**mpinf_args,
+				)
+				mpinf_manual.compute_mosaic_residuals()
+				stat_new = np.sum(mpinf_manual.residuals * Z)
+				np.testing.assert_array_almost_equal(
+					stat - b * slope,
+					stat_new,
+					decimal=5,
+					err_msg=f"Slope/intercept form used in inversion is inaccurate with b={b}, feature={feature}"
+				)
+
+	def test_linear_inversion(self):
+		"""
+		Tests that the algebra for the linear test statistic inversion is correct.
+		"""
+		np.random.seed(123)
+		nrand, alpha = 100, 0.05
+		for _ in range(10):
+			slope = 100 * np.random.uniform()
+			# Create statistics/null_slopes
+			stat = np.random.randn()
+			null_slopes = np.random.uniform(-slope, slope, size=nrand)
+			null_stats = np.random.randn(nrand)
+			# Queries p-value at a specific value of beta
+			def query_pval(beta):
+				new_stat = np.abs(stat - beta * slope)
+				new_null_stats = np.abs(null_stats - beta * null_slopes)
+				return (1 + np.sum(new_stat <= new_null_stats)) / (1 + nrand)
+			# Compute lower and upper bound
+			lower, upper = mp.panel.invert_linear_statistic(
+				stat=stat, slope=slope, null_stats=null_stats, 
+				null_slopes=null_slopes, alpha=alpha,
+			)
+			# Query
+			tol = 1e-3
+			for boundary, bsign, bname in zip(
+				[lower, upper], [1, -1], ['lower', 'upper']
+			):
+				for sign in [-1, 1]:
+					beta = boundary + sign * tol
+					pval = query_pval(beta)
+					self.assertTrue(
+						bsign * sign * pval >= bsign * sign * alpha,
+						f"invert_linear_statistic produces {bname}={boundary}, but at beta={beta}, pval={pval} with alpha={alpha}"
+					)
+			for beta in np.random.uniform(lower+tol, upper-tol, size=20):
+				pval = query_pval(beta)
+				self.assertTrue(
+					pval >= alpha,
+					f"invert_linear_statistic produces CI={[lower, upper]} but at beta={beta}, pval={pval} with alpha={alpha}"
+				)
 
 if __name__ == "__main__":
 	# Run tests---useful if using cprofilev
