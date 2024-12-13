@@ -168,7 +168,8 @@ class MosaicPanelTest(core.MosaicPermutationTest):
 		# Outcomes, subjects, times, and clusters
 		self.outcomes = _convert_pd_to_numpy(outcomes)
 		self.n = len(self.outcomes)
-		self.subjects = tilings._preprocess_partition(_convert_pd_to_numpy(subjects))
+		self.orig_subjects = _convert_pd_to_numpy(subjects)
+		self.subjects = tilings._preprocess_partition(self.orig_subjects)
 		self.times = _convert_pd_to_numpy(times)
 		if clusters is not None:
 			self.clusters = tilings._preprocess_partition(_convert_pd_to_numpy(clusters))
@@ -181,7 +182,7 @@ class MosaicPanelTest(core.MosaicPermutationTest):
 			self.covariates = np.ones((self.n, 1))
 		# Possibly add discrete covariates
 		if discrete_covariates is not None:
-			dummies = mp.utilities.get_dummies_sparse(discrete_covariates)
+			dummies = utilities.get_dummies_sparse(discrete_covariates)
 			self.covariates = scipy.sparse.hstack(
 				(scipy.sparse.csr_matrix(self.covariates), dummies)
 			)
@@ -250,6 +251,10 @@ class QuadraticMosaicPanelTest(MosaicPanelTest):
 		super().__init__(*args, **kwargs, test_stat=None)
 		self.method = method
 		self.weights = weights
+		if isinstance(self.weights, pd.Series):
+			# Ensure index is compatible with processed subjects
+			orig2new = {self.orig_subjects[x]:self.subjects[x] for x in range(len(self.subjects))}
+			self.weights.index = self.weights.index.map(orig2new)
 		if self.weights is None:
 			self.weights = np.ones(len(np.unique(self.subjects)))
 
@@ -507,6 +512,7 @@ class MosaicPanelInference(MosaicPanelTest):
 		nrand: int,
 		features: Optional[np.array]=None,
 		verbose: bool=True,
+		use_centered_stat: bool=False,
 	):
 		"""
 		Computes underlying confidence intervals for :meth:`fit`.
@@ -552,12 +558,20 @@ class MosaicPanelInference(MosaicPanelTest):
 			self._downdate_mosaic_residuals(feature=feature)
 			## Todo: is this a bottleneck? If so, it is valid to move it outside the for loop
 			flips = np.random.binomial(1, 0.5, size=(nrand, self.ntiles)).astype(int)
-			# Observe test statistic + slope as beta changes
-			stat = self.Zresid_sums[:, 0].sum()
-			slope = self.ZA_sums[:, 0].sum()
-			# Compute null test statistics + slopes as beta changes
-			null_stats = self.Zresid_sums[(xinds, flips)].sum(axis=1)
-			null_slopes = self.ZA_sums[(xinds, flips)].sum(axis=1)
+			if use_centered_stat:
+				# Observed test statistic + slope as beta changes
+				stat = self.Zresid_sums[:, 0].sum() - self.Zresid_sums[:, 1].sum()
+				slope = self.ZA_sums[:, 0].sum() - self.ZA_sums[:, 1].sum()
+				# Compute null test statistics + slopes as beta changes
+				null_stats = (self.Zresid_sums[(xinds, flips)] - self.Zresid_sums[(xinds, 1-flips)]).sum(axis=1)
+				null_slopes = (self.Zresid_sums[(xinds, flips)] - self.Zresid_sums[(xinds, 1-flips)]).sum(axis=1)
+			else:
+				# Observe test statistic + slope as beta changes
+				stat = self.Zresid_sums[:, 0].sum()
+				slope = self.ZA_sums[:, 0].sum()
+				# Compute null test statistics + slopes as beta changes
+				null_stats = self.Zresid_sums[(xinds, flips)].sum(axis=1)
+				null_slopes = self.ZA_sums[(xinds, flips)].sum(axis=1)
 			# Save
 			self._null_stats[j] = null_stats
 			self._null_slopes[j] = null_slopes
@@ -569,7 +583,7 @@ class MosaicPanelInference(MosaicPanelTest):
 			self.estimates[j] = stat / slope
 			# # null estimators under the null where beta_j = estimate
 			null_estimates = (null_stats - self.estimates[j] * null_slopes) / slope
-			self.ses[j] = np.std(null_estimates)
+			self.ses[j] = np.sqrt(np.mean(null_estimates**2))
 
 	def compute_cis(self, alpha=0.05):
 		for j in self.features:
@@ -598,6 +612,7 @@ class MosaicPanelInference(MosaicPanelTest):
 		alpha: int=0.05,
 		features: Optional[np.array]=None,
 		verbose: bool=True,
+		use_centered_stat: bool=False,
 	):
 		"""
 		Fits the linear model and returns confidence intervals.
@@ -613,6 +628,10 @@ class MosaicPanelInference(MosaicPanelTest):
 			Defaults to all features.
 		verbose : bool
 			If True, show progress bars.
+		use_centered_stat : bool
+			If True, uses a randomization-centered statistic.
+			This (perhaps pardoxically) leads to slightly higher
+			standard errors but narrower confidence intervals. 
 
 		Returns
 		-------
@@ -625,7 +644,10 @@ class MosaicPanelInference(MosaicPanelTest):
 		if verbose:
 			print("Precomputing confidence intervals.")
 		self._precompute_confidence_intervals(
-			nrand=nrand, features=features, verbose=verbose
+			nrand=nrand,
+			features=features,
+			verbose=verbose, 
+			use_centered_stat=use_centered_stat
 		)
 		self.compute_cis(alpha=alpha)
 		return self
