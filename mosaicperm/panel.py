@@ -144,6 +144,9 @@ class MosaicPanelTest(core.MosaicPermutationTest):
 	
 	Parameters
 	----------
+	sparse : bool
+		If True, uses sparse representation of discrete_covariates.
+		Ignored if discrete_covariates is not supplied.
 	tile_ids : np.array
 		n-length array. tile_ids[i] = k implies that observation
 		i is in tile k.
@@ -158,6 +161,7 @@ class MosaicPanelTest(core.MosaicPermutationTest):
 		clusters: Optional[Union[np.array, pd.Series, scipy.sparse.csr_matrix]]=None,
 		cts_covariates: Optional[Union[pd.DataFrame, np.array]]=None,
 		discrete_covariates: Optional[pd.DataFrame]=None,
+		sparse: bool=True,
 		# tstat kwargs
 		tstat_kwargs: Optional[dict]=None,
 		# tile / permutation kwargs
@@ -171,6 +175,8 @@ class MosaicPanelTest(core.MosaicPermutationTest):
 		self.orig_subjects = _convert_pd_to_numpy(subjects)
 		self.subjects = tilings._preprocess_partition(self.orig_subjects)
 		self.times = _convert_pd_to_numpy(times)
+		self.invariance = invariance
+		self.ntiles = ntiles
 		if clusters is not None:
 			self.clusters = tilings._preprocess_partition(_convert_pd_to_numpy(clusters))
 		else:
@@ -183,13 +189,22 @@ class MosaicPanelTest(core.MosaicPermutationTest):
 		# Possibly add discrete covariates
 		if discrete_covariates is not None:
 			dummies = utilities.get_dummies_sparse(discrete_covariates)
-			self.covariates = scipy.sparse.hstack(
-				(scipy.sparse.csr_matrix(self.covariates), dummies)
-			)
+			if sparse:
+				self.covariates = scipy.sparse.hstack(
+					(scipy.sparse.csr_matrix(self.covariates), dummies)
+				)
+			else:
+				self.covariates = np.concatenate([self.covariates, dummies.toarray()], axis=1)
 		self.n_cov = self.covariates.shape[1]
 		self.test_stat = test_stat
 		self.tstat_kwargs = dict() if tstat_kwargs is None else tstat_kwargs
-		# Create tiles: TODO different invariances for creating tiles in the future
+		self._create_tiles(invariance=invariance, ntiles=ntiles, tile_ids=tile_ids)
+
+	def _create_tiles(self, invariance: str, ntiles: int, tile_ids: Optional[np.array]=None):
+		"""
+		Creates tiles and tile transformations.
+		"""
+		# Create tiles
 		if tile_ids is None:
 			ntiles = int(min(ntiles, len(np.unique(self.clusters))))
 			self.tile_ids = tilings.coarsify_partition(self.clusters, k=ntiles, random=False)
@@ -551,13 +566,13 @@ class MosaicPanelInference(MosaicPanelTest):
 		self._null_stats[:] = np.nan
 		self._null_slopes = self._null_stats.copy()
 
+		# Randomization (common to all features)
+		flips = np.random.binomial(1, 0.5, size=(nrand, self.ntiles)).astype(int)
 		# Loop through and compute
 		xinds = np.stack([np.arange(self.ntiles) for _ in range(nrand)])
 		for j in utilities.vrange(len(features), verbose=verbose):
 			feature = features[j]
 			self._downdate_mosaic_residuals(feature=feature)
-			## Todo: is this a bottleneck? If so, it is valid to move it outside the for loop
-			flips = np.random.binomial(1, 0.5, size=(nrand, self.ntiles)).astype(int)
 			if use_centered_stat:
 				# Observed test statistic + slope as beta changes
 				stat = self.Zresid_sums[:, 0].sum() - self.Zresid_sums[:, 1].sum()
@@ -649,6 +664,8 @@ class MosaicPanelInference(MosaicPanelTest):
 			verbose=verbose, 
 			use_centered_stat=use_centered_stat
 		)
+		if verbose:
+			print("Computing CIs.")
 		self.compute_cis(alpha=alpha)
 		return self
 
@@ -676,8 +693,10 @@ def invert_linear_statistic(
 	under the assumption that |null_slopes| <= |slope|.
 	"""
 	nrand = len(null_stats)
-	if slope <= 0:
+	if slope < -tol:
 		raise ValueError(f"slope={slope} <= 0")
+	elif np.abs(slope) < tol:
+		return -np.inf, np.inf
 	# Adjust absolute values to account for precision errors
 	to_adjust = np.abs(null_slopes) > slope
 	null_slopes[to_adjust] = slope * np.sign(null_slopes[to_adjust])
