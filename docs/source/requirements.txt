@@ -8,4 +8,5 @@ tqdm>=4.66.2
 sphinx>=7.2.6
 numpydoc>=1.2
 furo>=2024.01.29
+scikit-learn
 IPython
