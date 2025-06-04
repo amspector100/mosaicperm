@@ -39,7 +39,7 @@ setuptools.setup(
 		"scipy>=1.11.0",
 		"pandas>=2.0.0",
 		"tqdm",
-		"sklearn",
+		"scikit-learn",
 		"seaborn",
 		"matplotlib",
 	],
