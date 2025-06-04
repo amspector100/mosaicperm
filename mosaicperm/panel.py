@@ -140,8 +140,6 @@ def _convert_pd_to_numpy(x):
 
 class MosaicPanelTest(core.MosaicPermutationTest):
 	"""
-	Note to self: this is an extension that should go in the appendix IMO.
-	
 	Parameters
 	----------
 	sparse : bool
