@@ -116,7 +116,7 @@ n
 	Returns
 	-------
 	residuals : np.array
-		(n_obs, n_subjects) array of OLS residuals.
+		n-length array of OLS residuals.
 	"""
 	n_cov = covariates.shape[-1]
 	# Case 1: dense.
@@ -140,14 +140,54 @@ def _convert_pd_to_numpy(x):
 
 class MosaicPanelTest(core.MosaicPermutationTest):
 	"""
+	Initialize a MosaicPanelTest for panel data analysis.
+
 	Parameters
 	----------
-	sparse : bool
+	outcomes : np.array or pd.Series
+		``n``-length array of outcome data for the panel analysis.
+	test_stat : callable
+		A function mapping a ``n``-length array of residuals to either:
+
+			- A single statistic measuring evidence against the null.
+			- Alternatively, a 1D array of many statistics, in which
+				case the p-value will adaptively aggregate evidence across
+				all test statistics.
+
+	subjects : np.array or pd.Series
+		``n``-length array specifying the subject identifier
+		for each observation.
+	times : np.array or pd.Series
+		``n``-length array specifying the time identifier
+		for each observation.
+	clusters : np.array, pd.Series, or scipy.sparse.csr_matrix, optional
+		``n``-length array where ``clusters[i] = k`` signals that 
+		observation i is in the kth cluster. If not provided, 
+		defalts to using subjects as clusters.
+	cts_covariates : pd.DataFrame or np.array, optional
+		``(n, p)``-shaped array of continuous covariates to control for
+		in the analysis. If not provided, defaults to an intercept-only model.
+	discrete_covariates : pd.DataFrame, optional
+		DataFrame of discrete/categorical covariates to be converted
+		to dummy variables and included in the model.
+	sparse : bool, default True
 		If True, uses sparse representation of discrete_covariates.
 		Ignored if discrete_covariates is not supplied.
-	tile_ids : np.array
-		n-length array. tile_ids[i] = k implies that observation
-		i is in tile k.
+	tstat_kwargs : dict, optional
+		Optional kwargs to be passed to ``test_stat``.
+	invariance : str, default 'local_exch'
+		A string specifying the type of transformation for permutations. Options:
+
+			- 'local_exch': swaps time t and t+1 for all even t.
+			- 'local_exch_cts': within each subject, swaps neighboring timepoints.
+			- 'time_reverse': reverses order of each time series.
+			- 'wild_bs': multiplies all residuals by -1.
+
+	ntiles : int, default 10
+		Number of tiles to use for the mosaic permutation test.
+	tile_ids : np.array, optional
+		``n``-length array where ``tile_ids[i] = k`` implies that observation
+		i is in tile k. If not provided, tiles are constructed automatically.
 	"""
 	def __init__(
 		self,
@@ -252,13 +292,33 @@ class MosaicPanelTest(core.MosaicPermutationTest):
 
 class QuadraticMosaicPanelTest(MosaicPanelTest):
 	"""
+	Mosaic permutation test for panel data using quadratic test statistics.
+	
+	This class extends MosaicPanelTest to perform tests based on quadratic forms
+	of residual covariances or correlations across tiles. It uses dynamic programming
+	to compute the permutation distribution extremely efficiently.
+
 	Parameters
 	----------
-	method : str
-		One of 'cov', 'abscov', 'corr', 'abscorr'
-	weights : pd.Series
-		n_subjects-shaped array mapping a subject
-		to its weight (which may be negative).
+	*args
+		Positional arguments passed to the parent MosaicPanelTest class.
+		See :class:`MosaicPanelTest` for details on required arguments
+		(outcomes, test_stat, subjects, times, etc.).
+	method : str, default 'cov'
+		The method for computing the quadratic test statistic. Options:
+
+		- 'cov': Uses covariances between tile-aggregated residuals.
+		- 'abscov': Uses absolute values of covariances between tile-aggregated residuals.
+		- 'corr': Uses correlations between tile-aggregated residuals.
+		- 'abscorr': Uses absolute values of correlations between tile-aggregated residuals.
+
+	weights : np.array or pd.Series, optional
+		``n_subjects``-length array mapping each subject to its weight
+		in the aggregation. Weights may be negative. If provided as a
+		pd.Series, the index should correspond to subject identifiers.
+		If not provided, defaults to equal weights of 1 for all subjects.
+	**kwargs
+		Additional keyword arguments passed to the parent MosaicPanelTest class.
 	"""
 	def __init__(self, *args, method: str='cov', weights: Optional[np.array]=None, **kwargs):
 		super().__init__(*args, **kwargs, test_stat=None)
@@ -419,7 +479,56 @@ def _compute_lfo_resid(
 
 class MosaicPanelInference(MosaicPanelTest):
 	"""
-	Produces confidence interval for linear models in panel data.
+	Mosaic permutation-based inference for linear models in panel data.
+	
+	Parameters
+	----------
+	*args
+		Positional arguments passed to the parent MosaicPanelTest class.
+		See :class:`MosaicPanelTest` for details on required arguments
+		(outcomes, subjects, times, etc.). Note that ``test_stat`` is
+		automatically set to None as it is not used in this inference class.
+	**kwargs
+		Additional keyword arguments passed to the parent MosaicPanelTest class.
+		Common arguments include ``cts_covariates``, ``discrete_covariates``,
+		``clusters``, ``invariance``, ``ntiles``, etc.
+
+	Notes
+	-----
+	For dense covariate matrices, the class uses efficient QR decomposition
+	updates to avoid recomputing regressions for each feature. For sparse
+	matrices, it falls back to recomputing regressions as needed.
+
+	Examples
+	--------
+	>>> import numpy as np
+	>>> import pandas as pd
+	>>> import mosaicperm as mp
+	>>> 
+	>>> # Generate synthetic panel data
+	>>> n_subjects, n_times = 50, 20
+	>>> n_obs = n_subjects * n_times
+	>>> subjects = np.repeat(np.arange(n_subjects), n_times)
+	>>> times = np.tile(np.arange(n_times), n_subjects)
+	>>> 
+	>>> # Generate covariates and outcomes
+	>>> X = np.random.randn(n_obs, 3)
+	>>> beta_true = np.array([1.0, -0.5, 0.2])
+	>>> outcomes = X @ beta_true + np.random.randn(n_obs) * 0.5
+	>>> 
+	>>> # Fit mosaic panel inference
+	>>> mpi = mp.panel.MosaicPanelInference(
+	...     outcomes=outcomes,
+	...     subjects=subjects,
+	...     times=times,
+	...     cts_covariates=X,
+	...     ntiles=8
+	... )
+	>>> mpi.fit(nrand=1000, alpha=0.05)
+	>>> print(mpi.summary)
+	
+	The summary will show estimates, standard errors, confidence intervals,
+	and p-values for each coefficient.
 	"""
 	def __init__(self, *args, **kwargs):
 		super().__init__(*args, **kwargs, test_stat=None)
@@ -628,14 +737,14 @@ class MosaicPanelInference(MosaicPanelTest):
 		use_centered_stat: bool=False,
 	):
 		"""
-		Fits the linear model and returns confidence intervals.
+		Fits the linear model and computes confidence interva
 
 		Parameters
 		----------
-		alpha : int
-			Desired nominal Type I error rate.
 		nrand : int
 			Number of randomizations.
+		alpha : int
+			Desired nominal Type I error rate.
 		features : np.array
 			The list of features to compute CIs for. 
 			Defaults to all features.

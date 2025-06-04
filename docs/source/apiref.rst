@@ -13,6 +13,19 @@ Factor models (``mosaicperm.factor``)
    :template: 
    ~mosaicperm.factor.ols_residuals
 
+Panel data (``mosaicperm.panel``)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. autosummary::
+   :toctree: generated/
+   :template: autosummary/class.rst
+
+   ~mosaicperm.panel.MosaicPanelInference
+   ~mosaicperm.panel.MosaicPanelTest
+   ~mosaicperm.panel.QuadraticMosaicPanelTest
+
+   :template: 
+   ~mosaicperm.panel.ols_residuals_panel
+
 Combining results (``mosaicperm.core``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 .. autosummary::
