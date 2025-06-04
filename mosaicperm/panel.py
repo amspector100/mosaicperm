@@ -105,7 +105,7 @@ def ols_residuals_panel(
 ):	
 	"""
 	Computes residuals via OLS (NOT cross-sectional OLS).
-n
+
 	Parameters
 	----------
 	outcomes : np.array
